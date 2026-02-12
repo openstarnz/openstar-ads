@@ -1,9 +1,14 @@
 use std::collections::{hash_map::Entry, HashMap};
 
-use ads::{AmsAddr, Client, Device, Handle, Result};
-use crossbeam_channel::Receiver;
+use ads::{
+    notif::Sample,
+    symbol::{self, get_symbol_info},
+    AmsAddr, Client, Device, Handle, Result,
+};
+use anyhow::Context;
+use crossbeam_channel::{Receiver, Sender};
 
-use crate::data_types::PlcDataType;
+use crate::data_types::{PlcDataType, SymbolTree, SymbolTypeTree};
 
 pub struct PlcClient {
     safe_cell: PlcClientSelfCell,
@@ -216,6 +221,54 @@ impl PlcClient {
         self.notification_handles.push(notification_handle);
 
         Ok(notification_handle)
+    }
+
+    pub async fn dynamic_subscribe(
+        &mut self,
+        name: &str,
+        sender_channel: Sender<SymbolTree>,
+    ) -> anyhow::Result<()> {
+        let handle = self.handle(name)?;
+
+        let index_offset = handle.raw();
+
+        let (symbols, type_map) =
+            get_symbol_info(self.device()).context("Couldn't get symbol info from device.")?;
+        let mut symbol = None;
+
+        for symbol_info in symbols {
+            if symbol_info.name.to_lowercase() == name.to_lowercase() {
+                symbol = Some(symbol_info);
+            }
+        }
+
+        let symbol = symbol.context(format!("Symbol {name} not found."))?;
+
+        let symbol_type_tree: SymbolTypeTree = (&symbol, &type_map)
+            .try_into()
+            .context("Failed to turn symbol info into symbol tree")?;
+
+        self.device().add_notification(
+            ads::index::RW_SYMVAL_BYHANDLE,
+            index_offset,
+            &ads::notif::Attributes::new(
+                symbol.size,
+                ads::notif::TransmissionMode::ServerOnChange,
+                std::time::Duration::ZERO,
+                // TODO: setting this to higher e.g: 1000ms does not work, maybe because the status data is changing every PLC cycle?
+                // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
+                std::time::Duration::from_millis(10),
+            ),
+        )?;
+
+        for notif in self.notification_receiver() {
+            for sample in notif.samples() {
+                let symbol_tree: SymbolTree = (&symbol_type_tree, sample.data, symbol.size).into();
+                let _ = sender_channel.send(symbol_tree);
+            }
+        }
+
+        Ok(())
     }
 
     pub fn notification_receiver(&self) -> Receiver<ads::notif::Notification> {
