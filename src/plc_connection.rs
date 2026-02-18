@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex},
@@ -8,7 +8,10 @@ use std::{
 
 use ads::{AmsAddr, Client};
 
-use crate::{data_types::PlcDataType, plc_client::PlcClient};
+use crate::{
+    data_types::{symbol_tree::SymbolTree, symbol_type_tree::SymbolTypeTree, PlcDataType},
+    plc_client::PlcClient,
+};
 
 #[derive(Clone)]
 pub struct PlcConnection {
@@ -108,6 +111,62 @@ impl PlcConnection {
             PlcConnectionState::Connected(_) => true,
             PlcConnectionState::Disconnected => false,
         }
+    }
+
+    /// Gets a symbol type tree for a given symbol path.
+    ///
+    /// Returns None if the PLC is not connected.
+    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<Option<SymbolTypeTree>> {
+        let mut plc_connection_state = self.state.lock().unwrap();
+
+        if let Some(client) = plc_connection_state.client_mut() {
+            let type_tree = client.get_dynamic_type_tree(name).map_err(|error| {
+                println!(
+                    "PLC client error when getting information for symbol {}: {}",
+                    name, error
+                );
+
+                plc_connection_state.handle_disconnect_error(&error);
+
+                error
+            })?;
+
+            return Ok(Some(type_tree));
+        }
+
+        Ok(None)
+    }
+
+    /// Gets a symbol type tree for a given symbol path.
+    ///
+    /// Returns None if the PLC is not connected.
+    pub async fn start_dynamic_symbol_receiver(
+        &self,
+        name: &str,
+        symbol_type_tree: SymbolTypeTree,
+        sender_channel: Sender<SymbolTree>,
+    ) -> Result<Option<()>> {
+        let mut plc_connection_state = self.state.lock().unwrap();
+
+        if let Some(client) = plc_connection_state.client_mut() {
+            client
+                .dynamic_symbol_notification_handler(name, symbol_type_tree, sender_channel)
+                .await
+                .map_err(|error| {
+                    println!(
+                        "PLC client error when getting information for symbol {}: {}",
+                        name, error
+                    );
+
+                    plc_connection_state.handle_disconnect_error(&error);
+
+                    error
+                })?;
+
+            return Ok(Some(()));
+        }
+
+        Ok(None)
     }
 
     /// Read a symbol from the PLC.
