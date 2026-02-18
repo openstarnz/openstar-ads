@@ -21,7 +21,7 @@ pub enum SymbolTree {
     Lint(i64),
     Ulint(u64),
     String(String),
-    Wstring(Extended),
+    Real80(Extended),
     Bool(bool),
     Unknown,
 }
@@ -115,7 +115,7 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
 
                 // The beckhoff PLC system uses little endian byte order
                 // https://infosys.beckhoff.com/english.php?content=../content/1033/tcplclib_tc2_utilities/35311883.html&id=
-                Self::Lreal(extended::Extended::from_le_bytes(buffer).to_f64())
+                Self::Real80(extended::Extended::from_le_bytes(buffer))
             }
             SymbolTypeTree::Bool => match u8::read_from(&data) {
                 Some(num) => Self::Bool(num != 1),
