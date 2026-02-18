@@ -1,14 +1,9 @@
 use std::collections::{hash_map::Entry, HashMap};
 
-use ads::{
-    notif::Sample,
-    symbol::{self, get_symbol_info},
-    AmsAddr, Client, Device, Handle, Result,
-};
-use anyhow::Context;
+use ads::{symbol::get_symbol_info, AmsAddr, Client, Device, Handle, Result};
 use crossbeam_channel::{Receiver, Sender};
 
-use crate::data_types::{PlcDataType, SymbolTree, SymbolTypeTree};
+use crate::data_types::{symbol_tree::SymbolTree, symbol_type_tree::SymbolTypeTree, PlcDataType};
 
 pub struct PlcClient {
     safe_cell: PlcClientSelfCell,
@@ -223,17 +218,8 @@ impl PlcClient {
         Ok(notification_handle)
     }
 
-    pub async fn dynamic_subscribe(
-        &mut self,
-        name: &str,
-        sender_channel: Sender<SymbolTree>,
-    ) -> anyhow::Result<()> {
-        let handle = self.handle(name)?;
-
-        let index_offset = handle.raw();
-
-        let (symbols, type_map) =
-            get_symbol_info(self.device()).context("Couldn't get symbol info from device.")?;
+    pub fn get_dynamic_type_tree(&mut self, name: &str) -> Result<SymbolTypeTree> {
+        let (symbols, type_map) = get_symbol_info(self.device())?;
         let mut symbol = None;
 
         for symbol_info in symbols {
@@ -242,29 +228,45 @@ impl PlcClient {
             }
         }
 
-        let symbol = symbol.context(format!("Symbol {name} not found."))?;
+        let Some(symbol) = symbol else {
+            return Ok(SymbolTypeTree::Missing);
+        };
 
-        let symbol_type_tree: SymbolTypeTree = (&symbol, &type_map)
-            .try_into()
-            .context("Failed to turn symbol info into symbol tree")?;
+        let Ok(symbol_type_tree) = (&symbol, &type_map).try_into() else {
+            return Ok(SymbolTypeTree::Unknown(symbol.size));
+        };
 
-        self.device().add_notification(
+        Ok(symbol_type_tree)
+    }
+
+    pub async fn dynamic_symbol_notification_handler(
+        &mut self,
+        name: &str,
+        symbol_type_tree: SymbolTypeTree,
+        sender_channel: Sender<SymbolTree>,
+    ) -> Result<()> {
+        let handle = self.handle(name)?;
+
+        let index_offset = handle.raw();
+
+        let notif_handle = self.device().add_notification(
             ads::index::RW_SYMVAL_BYHANDLE,
             index_offset,
             &ads::notif::Attributes::new(
-                symbol.size,
+                symbol_type_tree.get_size(),
                 ads::notif::TransmissionMode::ServerOnChange,
                 std::time::Duration::ZERO,
-                // TODO: setting this to higher e.g: 1000ms does not work, maybe because the status data is changing every PLC cycle?
-                // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
                 std::time::Duration::from_millis(10),
             ),
         )?;
 
         for notif in self.notification_receiver() {
             for sample in notif.samples() {
-                let symbol_tree: SymbolTree = (&symbol_type_tree, sample.data, symbol.size).into();
-                let _ = sender_channel.send(symbol_tree);
+                if sample.handle == notif_handle {
+                    let symbol_tree: SymbolTree =
+                        (&symbol_type_tree, sample.data, symbol_type_tree.get_size()).into();
+                    let _ = sender_channel.send(symbol_tree);
+                }
             }
         }
 
