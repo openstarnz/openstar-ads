@@ -3,7 +3,7 @@ use anyhow::Context;
 use indexmap::IndexMap;
 use std::{collections::HashMap, fmt::Debug};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum SymbolTypeTree {
     Struct(IndexMap<(String, Option<u32>), SymbolTypeTree>, usize),
     Array(Box<SymbolTypeTree>, usize),

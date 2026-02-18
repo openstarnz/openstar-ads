@@ -142,31 +142,55 @@ impl PlcConnection {
     /// Returns None if the PLC is not connected.
     pub async fn start_dynamic_symbol_receiver(
         &self,
-        name: &str,
+        name: String,
         symbol_type_tree: SymbolTypeTree,
         sender_channel: Sender<SymbolTree>,
     ) -> Result<Option<()>> {
-        let mut plc_connection_state = self.state.lock().unwrap();
+        let mut notif_handle = None;
+        {
+            let mut plc_connection_state = self.state.lock().unwrap();
 
-        if let Some(client) = plc_connection_state.client_mut() {
-            client
-                .dynamic_symbol_notification_handler(name, symbol_type_tree, sender_channel)
-                .await
-                .map_err(|error| {
-                    println!(
-                        "PLC client error when getting information for symbol {}: {}",
-                        name, error
-                    );
+            if let Some(client) = plc_connection_state.client_mut() {
+                notif_handle = Some(
+                    client
+                        .add_dynamic_symbol_notification(&name, &symbol_type_tree)
+                        .map_err(|error| {
+                            println!(
+                                "PLC client error when getting information for symbol {}: {}",
+                                name, error
+                            );
 
-                    plc_connection_state.handle_disconnect_error(&error);
+                            plc_connection_state.handle_disconnect_error(&error);
 
-                    error
-                })?;
-
-            return Ok(Some(()));
+                            error
+                        })?,
+                );
+            }
         }
 
-        Ok(None)
+        let Some(notif_receiver) = self.notification_receiver() else {
+            return Ok(None);
+        };
+
+        let Some(notif_handle) = notif_handle else {
+            return Ok(None);
+        };
+
+        // Runs the actual notification loop which filters for the correct symbol handle.
+        for notif in notif_receiver {
+            for sample in notif.samples() {
+                if sample.handle == notif_handle {
+                    let symbol_tree: SymbolTree =
+                        (&symbol_type_tree, sample.data, symbol_type_tree.get_size()).into();
+                    // If there is an error sending it means that all receivers are gone and therefore this thread has successfully ended.
+                    if let Err(_err) = sender_channel.send(symbol_tree) {
+                        return Ok(Some(()));
+                    };
+                }
+            }
+        }
+
+        Ok(Some(()))
     }
 
     /// Read a symbol from the PLC.

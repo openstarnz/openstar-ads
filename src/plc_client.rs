@@ -239,12 +239,11 @@ impl PlcClient {
         Ok(symbol_type_tree)
     }
 
-    pub async fn dynamic_symbol_notification_handler(
+    pub fn add_dynamic_symbol_notification(
         &mut self,
         name: &str,
-        symbol_type_tree: SymbolTypeTree,
-        sender_channel: Sender<SymbolTree>,
-    ) -> Result<()> {
+        symbol_type_tree: &SymbolTypeTree,
+    ) -> Result<u32> {
         let handle = self.handle(name)?;
 
         let index_offset = handle.raw();
@@ -260,17 +259,7 @@ impl PlcClient {
             ),
         )?;
 
-        for notif in self.notification_receiver() {
-            for sample in notif.samples() {
-                if sample.handle == notif_handle {
-                    let symbol_tree: SymbolTree =
-                        (&symbol_type_tree, sample.data, symbol_type_tree.get_size()).into();
-                    let _ = sender_channel.send(symbol_tree);
-                }
-            }
-        }
-
-        Ok(())
+        Ok(notif_handle)
     }
 
     pub fn notification_receiver(&self) -> Receiver<ads::notif::Notification> {
