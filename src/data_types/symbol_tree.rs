@@ -129,3 +129,21 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
         tree
     }
 }
+
+impl SymbolTree {
+    // Symbol path nodes are separated by periods.
+    pub fn get_child(&self, symbol_path: &str) -> &SymbolTree {
+        let path_tokens = symbol_path.split(".");
+        let mut current = self;
+        for token in path_tokens {
+            if let Self::Struct(children) = current {
+                if let Some(child) = children.get(token) {
+                    current = child;
+                    continue;
+                }
+            }
+            return &Self::Missing;
+        }
+        self
+    }
+}
