@@ -6,6 +6,7 @@ use std::{collections::HashMap, fmt::Debug};
 #[derive(Debug, PartialEq, Clone)]
 pub enum SymbolTypeTree {
     Struct(IndexMap<String, (SymbolTypeTree, Option<u32>)>, usize),
+    // Arrays not fully implemented.
     Array(Box<SymbolTypeTree>, usize),
     Void(usize),
     Int,
@@ -75,7 +76,7 @@ impl From<(u32, usize)> for SymbolTypeTree {
             t => {
                 println!("Found unknown type number {t}.");
                 Self::Unknown(size)
-            },
+            }
         }
     }
 }
@@ -98,9 +99,12 @@ impl TryFrom<(&Symbol, &HashMap<String, Type>)> for SymbolTypeTree {
                 for field in &tree_type.fields {
                     struct_map.insert(
                         field.name.clone(),
-                        ((field, type_map)
-                            .try_into()
-                            .unwrap_or(Self::Unknown(field.size)), field.offset),
+                        (
+                            (field, type_map)
+                                .try_into()
+                                .unwrap_or(Self::Unknown(field.size)),
+                            field.offset,
+                        ),
                     );
                 }
 
@@ -130,9 +134,12 @@ impl TryFrom<(&Field, &HashMap<String, Type>)> for SymbolTypeTree {
                 for field in &tree_type.fields {
                     struct_map.insert(
                         field.name.clone(),
-                        ((field, type_map)
-                            .try_into()
-                            .unwrap_or(Self::Unknown(field.size)), field.offset),
+                        (
+                            (field, type_map)
+                                .try_into()
+                                .unwrap_or(Self::Unknown(field.size)),
+                            field.offset,
+                        ),
                     );
                 }
 

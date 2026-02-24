@@ -1,5 +1,4 @@
 use super::symbol_type_tree::SymbolTypeTree;
-use extended::Extended;
 use indexmap::IndexMap;
 use serde::Serialize;
 use zerocopy::FromBytes;
@@ -9,6 +8,7 @@ pub enum SymbolTree {
     Missing,
     Malformed,
     Struct(IndexMap<String, SymbolTree>),
+    // Not fully implemented.
     Array(Vec<SymbolTree>),
     Void(Vec<u8>),
     Int(i16),
@@ -53,10 +53,11 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                 }
                 Self::Struct(tree_map)
             }
+            // Arrays are not implemented fully but this will at least provide the raw data.
             SymbolTypeTree::Array(_symbol_type_tree, size) => {
                 SymbolTree::Array([Self::Void(accessible_data[0..*size].to_vec())].to_vec())
             }
-            SymbolTypeTree::Void(size) => Self::Void(data.to_vec()[0..*size].to_vec()),
+            SymbolTypeTree::Void(size) => Self::Void(accessible_data[0..*size].to_vec()),
             SymbolTypeTree::Int => match i16::read_from_prefix(accessible_data) {
                 Some(num) => Self::Int(num),
                 None => Self::Malformed,
