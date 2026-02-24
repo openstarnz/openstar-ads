@@ -1,8 +1,8 @@
 use super::symbol_type_tree::SymbolTypeTree;
 use extended::Extended;
 use indexmap::IndexMap;
-use zerocopy::FromBytes;
 use serde::Serialize;
+use zerocopy::FromBytes;
 
 #[derive(Debug, Clone, Serialize)]
 pub enum SymbolTree {
@@ -28,8 +28,8 @@ pub enum SymbolTree {
 }
 
 impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
-    fn from((symbol_type_tree, data, offset): (&SymbolTypeTree, &[u8], usize)) -> Self {
-        let accessible_data = &data[offset..];
+    fn from((symbol_type_tree, data, parent_offset): (&SymbolTypeTree, &[u8], usize)) -> Self {
+        let accessible_data = &data[parent_offset..];
         let tree = match symbol_type_tree {
             SymbolTypeTree::Struct(tree_type_map, _) => {
                 let mut tree_map = IndexMap::new();
@@ -38,7 +38,7 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                         let child_offset = *offset as usize;
                         tree_map.insert(
                             name.clone(),
-                            (field_type_tree, data, child_offset).into(),
+                            (field_type_tree, data, parent_offset + child_offset).into(),
                         );
                     } else {
                         tree_map.insert(name.clone(), Self::Missing);
@@ -47,7 +47,7 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                 Self::Struct(tree_map)
             }
             SymbolTypeTree::Array(_symbol_type_tree, size) => {
-                SymbolTree::Array([Self::Void(data.to_vec()[0..*size].to_vec())].to_vec())
+                SymbolTree::Array([Self::Void(accessible_data[0..*size].to_vec())].to_vec())
             }
             SymbolTypeTree::Void(size) => Self::Void(data.to_vec()[0..*size].to_vec()),
             SymbolTypeTree::Int => match i16::read_from_prefix(accessible_data) {
@@ -90,9 +90,9 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                 Some(num) => Self::Ulint(num),
                 None => Self::Malformed,
             },
-            SymbolTypeTree::String(size) => {
-                Self::String(String::from_utf8_lossy(&accessible_data.to_vec()[0..*size]).to_string())
-            }
+            SymbolTypeTree::String(size) => Self::String(
+                String::from_utf8_lossy(&accessible_data.to_vec()[0..*size]).to_string(),
+            ),
             SymbolTypeTree::Wstring(size) => {
                 if size % 2 != 0 {
                     return Self::Malformed;
