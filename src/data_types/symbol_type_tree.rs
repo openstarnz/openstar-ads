@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt::Debug};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum SymbolTypeTree {
-    Struct(IndexMap<(String, Option<u32>), SymbolTypeTree>, usize),
+    Struct(IndexMap<String, (SymbolTypeTree, Option<u32>)>, usize),
     Array(Box<SymbolTypeTree>, usize),
     Void(usize),
     Int,
@@ -72,7 +72,10 @@ impl From<(u32, usize)> for SymbolTypeTree {
             32 => Self::Real80,
             33 => Self::Bool,
             65 => Self::Compound(size),
-            _ => Self::Unknown(size),
+            t => {
+                println!("Found unknown type number {t}.");
+                Self::Unknown(size)
+            },
         }
     }
 }
@@ -87,17 +90,17 @@ impl TryFrom<(&Symbol, &HashMap<String, Type>)> for SymbolTypeTree {
 
         if let Self::Compound(_struct_size) = tree {
             let tree_type = type_map
-                .get(&symbol.name)
+                .get(&symbol.typ)
                 .context("Couldn't get symbol type information.")?;
             if tree_type.fields.len() > 0 {
                 let mut struct_map = IndexMap::new();
 
                 for field in &tree_type.fields {
                     struct_map.insert(
-                        (field.name.clone(), field.offset),
-                        (field, type_map)
+                        field.name.clone(),
+                        ((field, type_map)
                             .try_into()
-                            .unwrap_or(Self::Unknown(field.size)),
+                            .unwrap_or(Self::Unknown(field.size)), field.offset),
                     );
                 }
 
@@ -119,17 +122,17 @@ impl TryFrom<(&Field, &HashMap<String, Type>)> for SymbolTypeTree {
 
         if let Self::Compound(_struct_size) = tree {
             let tree_type = type_map
-                .get(&field.name)
+                .get(&field.typ)
                 .context("Couldn't get symbol type information.")?;
             if tree_type.fields.len() > 0 {
                 let mut struct_map = IndexMap::new();
 
                 for field in &tree_type.fields {
                     struct_map.insert(
-                        (field.name.clone(), field.offset),
-                        (field, type_map)
+                        field.name.clone(),
+                        ((field, type_map)
                             .try_into()
-                            .unwrap_or(Self::Unknown(field.size)),
+                            .unwrap_or(Self::Unknown(field.size)), field.offset),
                     );
                 }
 
@@ -140,5 +143,23 @@ impl TryFrom<(&Field, &HashMap<String, Type>)> for SymbolTypeTree {
         }
 
         Ok(tree)
+    }
+}
+
+impl SymbolTypeTree {
+    // Symbol path nodes are separated by periods.
+    pub fn get_child(&self, symbol_path: &str) -> &SymbolTypeTree {
+        let path_tokens = symbol_path.split(".");
+        let mut current = self;
+        for token in path_tokens {
+            if let Self::Struct(children, _size) = current {
+                if let Some((child, _offset)) = children.get(token) {
+                    current = child;
+                    continue;
+                }
+            }
+            return &Self::Missing;
+        }
+        current
     }
 }

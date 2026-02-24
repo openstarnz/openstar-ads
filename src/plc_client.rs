@@ -1,9 +1,9 @@
 use std::collections::{hash_map::Entry, HashMap};
 
 use ads::{symbol::get_symbol_info, AmsAddr, Client, Device, Handle, Result};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 
-use crate::data_types::{symbol_tree::SymbolTree, symbol_type_tree::SymbolTypeTree, PlcDataType};
+use crate::data_types::{symbol_type_tree::SymbolTypeTree, PlcDataType};
 
 pub struct PlcClient {
     safe_cell: PlcClientSelfCell,
@@ -232,8 +232,12 @@ impl PlcClient {
             return Ok(SymbolTypeTree::Missing);
         };
 
-        let Ok(symbol_type_tree) = (&symbol, &type_map).try_into() else {
-            return Ok(SymbolTypeTree::Unknown(symbol.size));
+        let symbol_type_tree = match (&symbol, &type_map).try_into() {
+            Ok(symbol_type_tree) => symbol_type_tree,
+            Err(err) => {
+                println!("Error when getting symbol type from type map {err:?}");
+                return Ok(SymbolTypeTree::Unknown(symbol.size));
+            },
         };
 
         Ok(symbol_type_tree)
