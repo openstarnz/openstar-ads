@@ -29,6 +29,13 @@ pub enum SymbolTree {
 
 impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
     fn from((symbol_type_tree, data, parent_offset): (&SymbolTypeTree, &[u8], usize)) -> Self {
+        if parent_offset > data.len() {
+            println!(
+                "Offset of {parent_offset} greater than data length of {}.",
+                data.len()
+            );
+            return Self::Unknown;
+        }
         let accessible_data = &data[parent_offset..];
         let tree = match symbol_type_tree {
             SymbolTypeTree::Struct(tree_type_map, _) => {

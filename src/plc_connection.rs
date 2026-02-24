@@ -180,8 +180,7 @@ impl PlcConnection {
         for notif in notif_receiver {
             for sample in notif.samples() {
                 if sample.handle == notif_handle {
-                    let symbol_tree: SymbolTree =
-                        (&symbol_type_tree, sample.data, symbol_type_tree.get_size()).into();
+                    let symbol_tree: SymbolTree = (&symbol_type_tree, sample.data, 0).into();
                     // If there is an error sending it means that all receivers are gone and therefore this thread has successfully ended.
                     if let Err(_err) = sender_channel.send(symbol_tree) {
                         return Ok(Some(()));
