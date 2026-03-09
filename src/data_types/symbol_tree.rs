@@ -4,6 +4,7 @@ use serde::Serialize;
 use zerocopy::FromBytes;
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
 pub enum SymbolTree {
     Missing,
     Malformed,
