@@ -1,4 +1,5 @@
 use super::symbol_type_tree::SymbolTypeTree;
+use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
 use zerocopy::FromBytes;
@@ -157,5 +158,43 @@ impl SymbolTree {
             return &Self::Missing;
         }
         current
+    }
+
+    pub fn get_timestamp(&self, path: &str) -> Option<DateTime<Utc>> {
+        if let SymbolTree::Struct(map) = self.get_child(path) {
+            let SymbolTree::Uint(year) = *map.get("year")? else {
+                return None;
+            };
+            let SymbolTree::Uint(month) = *map.get("month")? else {
+                return None;
+            };
+            let SymbolTree::Uint(day) = *map.get("day")? else {
+                return None;
+            };
+            let SymbolTree::Uint(hour) = *map.get("hour")? else {
+                return None;
+            };
+            let SymbolTree::Uint(minute) = *map.get("minute")? else {
+                return None;
+            };
+            let SymbolTree::Uint(second) = *map.get("second")? else {
+                return None;
+            };
+            let SymbolTree::Uint(milliseconds) = *map.get("milliseconds")? else {
+                return None;
+            };
+
+            NaiveDate::from_ymd_opt(year.into(), month.into(), day.into()).and_then(|date| {
+                date.and_hms_milli_opt(
+                    hour.into(),
+                    minute.into(),
+                    second.into(),
+                    milliseconds.into(),
+                )
+                .map(|datetime| datetime.and_utc())
+            })
+        } else {
+            None
+        }
     }
 }

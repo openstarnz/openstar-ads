@@ -1,4 +1,5 @@
 pub mod primitives;
+pub mod symbol_map;
 pub mod symbol_tree;
 pub mod symbol_type_tree;
 
