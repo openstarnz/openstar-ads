@@ -9,7 +9,12 @@ use std::{
 use ads::{AmsAddr, Client};
 
 use crate::{
-    data_types::{symbol_tree::SymbolTree, symbol_type_tree::SymbolTypeTree, PlcDataType},
+    data_types::{
+        symbol_map::{SymbolMap, SymbolMapExt, SymbolTypeMap, SymbolTypeMapExt},
+        symbol_tree::SymbolTree,
+        symbol_type_tree::SymbolTypeTree,
+        PlcDataType,
+    },
     plc_client::PlcClient,
 };
 
@@ -181,6 +186,63 @@ impl PlcConnection {
             for sample in notif.samples() {
                 if sample.handle == notif_handle {
                     let symbol_tree: SymbolTree = (&symbol_type_tree, sample.data, 0).into();
+                    // If there is an error sending it means that all receivers are gone and therefore this thread has successfully ended.
+                    if let Err(_err) = sender_channel.send(symbol_tree) {
+                        return Ok(Some(()));
+                    };
+                }
+            }
+        }
+
+        Ok(Some(()))
+    }
+
+    /// Gets a symbol type tree for a given symbol path.
+    ///
+    /// Returns None if the PLC is not connected.
+    pub async fn start_dynamic_symbol_map_receiver(
+        &self,
+        name: String,
+        symbol_type_tree: SymbolTypeTree,
+        sender_channel: Sender<SymbolMap>,
+    ) -> Result<Option<()>> {
+        let mut notif_handle = None;
+        {
+            let mut plc_connection_state = self.state.lock().unwrap();
+
+            if let Some(client) = plc_connection_state.client_mut() {
+                notif_handle = Some(
+                    client
+                        .add_dynamic_symbol_notification(&name, &symbol_type_tree)
+                        .map_err(|error| {
+                            println!(
+                                "PLC client error when getting information for symbol {}: {}",
+                                name, error
+                            );
+
+                            plc_connection_state.handle_disconnect_error(&error);
+
+                            error
+                        })?,
+                );
+            }
+        }
+
+        let Some(notif_receiver) = self.notification_receiver() else {
+            return Ok(None);
+        };
+
+        let Some(notif_handle) = notif_handle else {
+            return Ok(None);
+        };
+
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, name);
+        // Runs the actual notification loop which filters for the correct symbol handle.
+        for notif in notif_receiver {
+            for sample in notif.samples() {
+                if sample.handle == notif_handle {
+                    let symbol_tree: SymbolMap =
+                        SymbolMap::from_bytes(&symbol_type_map, sample.data).into();
                     // If there is an error sending it means that all receivers are gone and therefore this thread has successfully ended.
                     if let Err(_err) = sender_channel.send(symbol_tree) {
                         return Ok(Some(()));
