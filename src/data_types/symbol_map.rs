@@ -5,6 +5,8 @@ use zerocopy::FromBytes;
 use crate::data_types::symbol_type_tree::SymbolTypeTree;
 pub type SymbolPath = String;
 pub type SymbolOffset = u32;
+pub type SymbolMap = IndexMap<SymbolPath, PrimitiveValue>;
+pub type SymbolTypeMap = IndexMap<SymbolPath, PrimitiveSymbolDescriptor>;
 
 pub enum PrimitiveSymbolType {
     Int,
@@ -26,14 +28,14 @@ pub enum PrimitiveSymbolType {
 
 pub struct PrimitiveSymbolDescriptor {
     symbol_type: PrimitiveSymbolType,
-    offset: SymbolOffset,
+    root_symbol_offset: SymbolOffset,
 }
 
 impl From<(PrimitiveSymbolType, SymbolOffset)> for PrimitiveSymbolDescriptor {
     fn from((symbol_type, offset): (PrimitiveSymbolType, SymbolOffset)) -> Self {
         PrimitiveSymbolDescriptor {
             symbol_type,
-            offset,
+            root_symbol_offset: offset,
         }
     }
 }
@@ -45,11 +47,22 @@ pub enum PrimitiveValue {
     String(String),
     Timestamp(DateTime<Utc>),
     Bool(bool),
-    Missing,
+    Malformed,
 }
 
-pub type SymbolMap = IndexMap<SymbolPath, PrimitiveValue>;
-pub type SymbolTypeMap = IndexMap<SymbolPath, PrimitiveSymbolDescriptor>;
+impl PrimitiveValue {
+    pub fn to_string(&self) -> String {
+        match self {
+            PrimitiveValue::Int(value) => value.to_string(),
+            PrimitiveValue::Uint(value) => value.to_string(),
+            PrimitiveValue::Float(value) => value.to_string(),
+            PrimitiveValue::String(value) => value.to_string(),
+            PrimitiveValue::Timestamp(value) => value.to_string(),
+            PrimitiveValue::Bool(value) => value.to_string(),
+            PrimitiveValue::Malformed => "Malformed".to_string(),
+        }
+    }
+}
 
 fn get_timestruct_keys() -> Vec<String> {
     vec![
@@ -161,7 +174,7 @@ impl SymbolTypeMapExt for SymbolTypeMap {
 }
 
 impl PrimitiveSymbolDescriptor {
-    fn timestruct_from_bytes(offsets: [usize; 7], bytes: &[u8]) -> Option<DateTime<Utc>> {
+    fn datetime_from_bytes(offsets: [usize; 7], bytes: &[u8]) -> Option<DateTime<Utc>> {
         let year = u16::read_from_prefix(&bytes[offsets[0]..])?;
         let month = u16::read_from_prefix(&bytes[offsets[1]..])?;
         let day = u16::read_from_prefix(&bytes[offsets[2]..])?;
@@ -182,70 +195,70 @@ impl PrimitiveSymbolDescriptor {
     }
 
     pub fn read_from_bytes(&self, bytes: &[u8]) -> PrimitiveValue {
-        let accessible_data: &[u8] = &bytes[(self.offset as usize)..];
+        let accessible_data: &[u8] = &bytes[(self.root_symbol_offset as usize)..];
         match self.symbol_type {
             PrimitiveSymbolType::TimeStruct(offsets) => {
-                match Self::timestruct_from_bytes(offsets, accessible_data) {
+                match Self::datetime_from_bytes(offsets, accessible_data) {
                     Some(datetime) => PrimitiveValue::Timestamp(datetime),
-                    None => PrimitiveValue::Missing,
+                    None => PrimitiveValue::Malformed,
                 }
             }
             PrimitiveSymbolType::Real => match f32::read_from_prefix(accessible_data) {
                 Some(float) => PrimitiveValue::Float(float as f64),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Lreal => match f64::read_from_prefix(accessible_data) {
                 Some(float) => PrimitiveValue::Float(float),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Sint => match i8::read_from_prefix(accessible_data) {
                 Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Int => match i16::read_from_prefix(accessible_data) {
                 Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Dint => match i32::read_from_prefix(accessible_data) {
                 Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Lint => match i64::read_from_prefix(accessible_data) {
                 Some(integer) => PrimitiveValue::Int(integer),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Usint => match u8::read_from_prefix(accessible_data) {
                 Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Uint => match u16::read_from_prefix(accessible_data) {
                 Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Udint => match u32::read_from_prefix(accessible_data) {
                 Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Ulint => match u64::read_from_prefix(accessible_data) {
                 Some(uinteger) => PrimitiveValue::Uint(uinteger),
-                None => PrimitiveValue::Missing,
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::String(size) => PrimitiveValue::String(
                 String::from_utf8_lossy(&accessible_data.to_vec()[0..size]).to_string(),
             ),
             PrimitiveSymbolType::Bool => match u8::read_from(accessible_data) {
-                Some(num) => PrimitiveValue::Bool(num != 1),
-                None => PrimitiveValue::Missing,
+                Some(num) => PrimitiveValue::Bool(num == 0),
+                None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Wstring(size) => {
                 if size % 2 != 0 {
-                    return PrimitiveValue::Missing;
+                    return PrimitiveValue::Malformed;
                 }
                 let mut words = Vec::new();
                 for i in (0..size).step_by(2) {
                     let Some(word) = u16::read_from(&accessible_data[i..i + 2]) else {
                         // If there is somehow not enough bytes in the data then the data is malformed.
-                        return PrimitiveValue::Missing;
+                        return PrimitiveValue::Malformed;
                     };
                     words.push(word);
                 }
@@ -254,7 +267,7 @@ impl PrimitiveSymbolDescriptor {
             }
             PrimitiveSymbolType::Real80 => {
                 if bytes.len() < 10 {
-                    return PrimitiveValue::Missing;
+                    return PrimitiveValue::Malformed;
                 }
                 let mut buffer: [u8; 10] = [0; 10];
                 buffer.copy_from_slice(&accessible_data[0..10]);
