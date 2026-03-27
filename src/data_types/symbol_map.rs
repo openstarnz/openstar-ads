@@ -1,5 +1,6 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
+use serde::Serialize;
 use zerocopy::FromBytes;
 
 use crate::data_types::symbol_type_tree::SymbolTypeTree;
@@ -23,7 +24,7 @@ pub enum PrimitiveSymbolType {
     Wstring(usize),
     Real80,
     Bool,
-    TimeStruct([usize; 7]),
+    TimeStruct([usize; 8]),
 }
 
 pub struct PrimitiveSymbolDescriptor {
@@ -40,6 +41,8 @@ impl From<(PrimitiveSymbolType, SymbolOffset)> for PrimitiveSymbolDescriptor {
     }
 }
 
+#[derive(Clone, PartialEq, Debug, Serialize)]
+#[serde(untagged)]
 pub enum PrimitiveValue {
     Int(i64),
     Uint(u64),
@@ -66,13 +69,14 @@ impl PrimitiveValue {
 
 fn get_timestruct_keys() -> Vec<String> {
     vec![
-        "year".into(),
-        "month".into(),
-        "day".into(),
-        "hour".into(),
-        "minute".into(),
-        "second".into(),
-        "milliseconds".into(),
+        "wYear".into(),
+        "wMonth".into(),
+        "wDayOfWeek".into(),
+        "wDay".into(),
+        "wHour".into(),
+        "wMinute".into(),
+        "wSecond".into(),
+        "wMilliseconds".into(),
     ]
 }
 
@@ -87,7 +91,7 @@ impl SymbolTypeMapExt for SymbolTypeMap {
             SymbolTypeTree::Struct(index_map, _size) => {
                 let timestruct_keys = get_timestruct_keys();
                 if index_map.keys().cloned().collect::<Vec<_>>() == timestruct_keys {
-                    let mut offsets: [usize; 7] = [0; 7];
+                    let mut offsets: [usize; 8] = [0; 8];
                     for (symbol_name, (symbol_type_tree, child_offset)) in index_map {
                         // Timestructs are invalid if a child offset is missing, a child type is not Uint, or if a child name is somehow not one of the correct keys
                         let Some(child_offset) = child_offset else {
@@ -111,11 +115,19 @@ impl SymbolTypeMapExt for SymbolTypeMap {
                 } else {
                     for (child_path, (child_tree, child_offset)) in index_map {
                         if let Some(child_offset) = child_offset {
-                            map.append(&mut SymbolTypeMap::from_tree(
-                                child_tree,
-                                offset + child_offset,
-                                format!("{path}.{child_path}"),
-                            ));
+                            if path == "" {
+                                map.append(&mut SymbolTypeMap::from_tree(
+                                    child_tree,
+                                    offset + child_offset,
+                                    format!("{child_path}"),
+                                ));
+                            } else {
+                                map.append(&mut SymbolTypeMap::from_tree(
+                                    child_tree,
+                                    offset + child_offset,
+                                    format!("{path}.{child_path}"),
+                                ));
+                            }
                         }
                     }
                 }
@@ -174,14 +186,14 @@ impl SymbolTypeMapExt for SymbolTypeMap {
 }
 
 impl PrimitiveSymbolDescriptor {
-    fn datetime_from_bytes(offsets: [usize; 7], bytes: &[u8]) -> Option<DateTime<Utc>> {
+    fn datetime_from_bytes(offsets: [usize; 8], bytes: &[u8]) -> Option<DateTime<Utc>> {
         let year = u16::read_from_prefix(&bytes[offsets[0]..])?;
         let month = u16::read_from_prefix(&bytes[offsets[1]..])?;
-        let day = u16::read_from_prefix(&bytes[offsets[2]..])?;
-        let hour = u16::read_from_prefix(&bytes[offsets[3]..])?;
-        let minute = u16::read_from_prefix(&bytes[offsets[4]..])?;
-        let second = u16::read_from_prefix(&bytes[offsets[5]..])?;
-        let milliseconds = u16::read_from_prefix(&bytes[offsets[6]..])?;
+        let day = u16::read_from_prefix(&bytes[offsets[3]..])?;
+        let hour = u16::read_from_prefix(&bytes[offsets[4]..])?;
+        let minute = u16::read_from_prefix(&bytes[offsets[5]..])?;
+        let second = u16::read_from_prefix(&bytes[offsets[6]..])?;
+        let milliseconds = u16::read_from_prefix(&bytes[offsets[7]..])?;
 
         NaiveDate::from_ymd_opt(year.into(), month.into(), day.into()).and_then(|date| {
             date.and_hms_milli_opt(
