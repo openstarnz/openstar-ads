@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::sync::broadcast;
 
 use ads::{AmsAddr, Client};
 
@@ -204,7 +205,7 @@ impl PlcConnection {
         &self,
         name: String,
         symbol_type_tree: SymbolTypeTree,
-        sender_channel: Sender<SymbolMap>,
+        sender_channel: broadcast::Sender<SymbolMap>,
     ) -> Result<Option<()>> {
         let mut notif_handle = None;
         {
@@ -236,9 +237,12 @@ impl PlcConnection {
             return Ok(None);
         };
 
-        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, name);
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
         // Runs the actual notification loop which filters for the correct symbol handle.
-        for notif in notif_receiver {
+        loop {
+            let notif_result = notif_receiver.recv_timeout(std::time::Duration::from_secs(5));
+            let notif = notif_result
+                .context("Receive error while receiving from PLC notification channel.")?;
             for sample in notif.samples() {
                 if sample.handle == notif_handle {
                     let symbol_tree: SymbolMap =
@@ -249,9 +253,8 @@ impl PlcConnection {
                     };
                 }
             }
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
-
-        Ok(Some(()))
     }
 
     /// Read a symbol from the PLC.

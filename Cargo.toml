@@ -16,4 +16,5 @@ indexmap = { version = "2.13.0", features = ["serde"] }
 self_cell = "1.0.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 zerocopy = { version = "0.7.29", features = ["derive"] }
