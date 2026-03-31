@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -8,6 +10,17 @@ pub type SymbolPath = String;
 pub type SymbolOffset = u32;
 pub type SymbolMap = IndexMap<SymbolPath, PrimitiveValue>;
 pub type SymbolTypeMap = IndexMap<SymbolPath, PrimitiveSymbolDescriptor>;
+
+pub const TIMESTRUCT_KEYS: [&str; 8] = [
+    "wYear",
+    "wMonth",
+    "wDayOfWeek",
+    "wDay",
+    "wHour",
+    "wMinute",
+    "wSecond",
+    "wMilliseconds",
+];
 
 pub enum PrimitiveSymbolType {
     Int,
@@ -25,6 +38,7 @@ pub enum PrimitiveSymbolType {
     Real80,
     Bool,
     TimeStruct([usize; 8]),
+    Void(usize),
 }
 
 pub struct PrimitiveSymbolDescriptor {
@@ -51,33 +65,22 @@ pub enum PrimitiveValue {
     Timestamp(DateTime<Utc>),
     Bool(bool),
     Malformed,
+    Void(Vec<u8>),
 }
 
-impl PrimitiveValue {
-    pub fn to_string(&self) -> String {
+impl Display for PrimitiveValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PrimitiveValue::Int(value) => value.to_string(),
-            PrimitiveValue::Uint(value) => value.to_string(),
-            PrimitiveValue::Float(value) => value.to_string(),
-            PrimitiveValue::String(value) => value.to_string(),
-            PrimitiveValue::Timestamp(value) => value.to_string(),
-            PrimitiveValue::Bool(value) => value.to_string(),
-            PrimitiveValue::Malformed => "Malformed".to_string(),
+            PrimitiveValue::Int(value) => f.write_str(&value.to_string()),
+            PrimitiveValue::Uint(value) => f.write_str(&value.to_string()),
+            PrimitiveValue::Float(value) => f.write_str(&value.to_string()),
+            PrimitiveValue::String(value) => f.write_str(&value.to_string()),
+            PrimitiveValue::Timestamp(value) => f.write_str(&value.to_string()),
+            PrimitiveValue::Bool(value) => f.write_str(&value.to_string()),
+            PrimitiveValue::Malformed => f.write_str("Malformed"),
+            PrimitiveValue::Void(_items) => f.write_str("Void"),
         }
     }
-}
-
-fn get_timestruct_keys() -> Vec<String> {
-    vec![
-        "wYear".into(),
-        "wMonth".into(),
-        "wDayOfWeek".into(),
-        "wDay".into(),
-        "wHour".into(),
-        "wMinute".into(),
-        "wSecond".into(),
-        "wMilliseconds".into(),
-    ]
 }
 
 pub trait SymbolTypeMapExt {
@@ -89,18 +92,21 @@ impl SymbolTypeMapExt for SymbolTypeMap {
         let mut map = SymbolTypeMap::new();
         match tree {
             SymbolTypeTree::Struct(index_map, _size) => {
-                let timestruct_keys = get_timestruct_keys();
-                if index_map.keys().cloned().collect::<Vec<_>>() == timestruct_keys {
+                if index_map.keys().collect::<Vec<_>>() == TIMESTRUCT_KEYS {
                     let mut offsets: [usize; 8] = [0; 8];
                     for (symbol_name, (symbol_type_tree, child_offset)) in index_map {
-                        // Timestructs are invalid if a child offset is missing, a child type is not Uint, or if a child name is somehow not one of the correct keys
+                        // Timestructs are invalid if a child offset is missing ...
                         let Some(child_offset) = child_offset else {
                             return SymbolTypeMap::new();
                         };
+
+                        // or a child type is not Uint ...
                         let SymbolTypeTree::Uint = symbol_type_tree else {
                             return SymbolTypeMap::new();
                         };
-                        let Some(index) = timestruct_keys.iter().position(|x| *x == symbol_name)
+
+                        // or if a child name is somehow not one of the correct keys ...
+                        let Some(index) = TIMESTRUCT_KEYS.iter().position(|x| *x == symbol_name)
                         else {
                             return SymbolTypeMap::new();
                         };
@@ -174,11 +180,24 @@ impl SymbolTypeMapExt for SymbolTypeMap {
             SymbolTypeTree::Bool => {
                 map.insert(path, (PrimitiveSymbolType::Bool, offset).into());
             }
-            _ => {} // SymbolTypeTree::Array(symbol_type_tree, _) => todo!(),
-                    // SymbolTypeTree::Void(_) => todo!(),
-                    // SymbolTypeTree::Compound(_) => todo!(),
-                    // SymbolTypeTree::Unknown(_) => todo!(),
-                    // SymbolTypeTree::Missing => todo!(),
+            // This is not implemented yet as getting the type the Array contains is elusive
+            // Converts to void so that the consumer can attempt to retrieve the data
+            SymbolTypeTree::Array(_symbol_type_tree, size) => {
+                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+            }
+            SymbolTypeTree::Void(size) => {
+                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+            }
+            // Converts to void so that the consumer can attempt to retrieve the data
+            SymbolTypeTree::Unknown(size) => {
+                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+            }
+            // This is a conversion type and represents that
+            SymbolTypeTree::Compound(_) => {
+                unimplemented!("Conversion of unspecified Compount type not possible.");
+            }
+            // Missing means not in the structure so we don't add it to the map
+            SymbolTypeTree::Missing => {}
         };
 
         map
@@ -288,6 +307,9 @@ impl PrimitiveSymbolDescriptor {
                 // https://infosys.beckhoff.com/english.php?content=../content/1033/tcplclib_tc2_utilities/35311883.html&id=
                 // TODO: figure out a good way to deal with these
                 PrimitiveValue::Float(extended::Extended::from_le_bytes(buffer).to_f64())
+            }
+            PrimitiveSymbolType::Void(size) => {
+                PrimitiveValue::Void(accessible_data[0..size].to_vec())
             }
         }
     }
