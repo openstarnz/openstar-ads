@@ -36,7 +36,7 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                 "Offset of {parent_offset} greater than data length of {}.",
                 data.len()
             );
-            return Self::Unknown;
+            return Self::Missing;
         }
         let accessible_data = &data[parent_offset..];
         let tree = match symbol_type_tree {
