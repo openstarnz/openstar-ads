@@ -132,7 +132,14 @@ impl PlcConnection {
                     name, error
                 );
 
-                plc_connection_state.handle_disconnect_error(&error);
+                match &error {
+                    crate::plc_client::PlcClientError::AdsError(error) => {
+                        plc_connection_state.handle_disconnect_error(error)
+                    }
+                    crate::plc_client::PlcClientError::SymbolTypeTreeError(
+                        _symbol_type_tree_error,
+                    ) => plc_connection_state.disconnect(),
+                };
 
                 error
             })?;

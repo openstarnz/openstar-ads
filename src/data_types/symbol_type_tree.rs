@@ -2,7 +2,7 @@ use ads::symbol::{Field, Symbol, Type};
 use indexmap::IndexMap;
 use std::{collections::HashMap, fmt::Debug};
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum SymbolTypeTreeError {
     #[error("Couldn't get symbol type information: {0}")]
     MissingSymbolTypeInfo(String),
@@ -113,12 +113,9 @@ fn try_from_type_or_field(
     let mut tree = (base_type, size).into();
 
     if let SymbolTypeTree::Compound(_struct_size) = tree {
-        let tree_type =
-            type_map
-                .get(type_name)
-                .ok_or(SymbolTypeTreeError::MissingSymbolTypeInfo(
-                    type_name.to_string(),
-                ))?;
+        let tree_type = type_map
+            .get(type_name)
+            .ok_or_else(|| SymbolTypeTreeError::MissingSymbolTypeInfo(type_name.to_string()))?;
         if tree_type.fields.len() > 0 {
             let mut struct_map = IndexMap::new();
 
@@ -137,7 +134,9 @@ fn try_from_type_or_field(
             tree = SymbolTypeTree::Struct(struct_map, tree_type.size);
         } else {
             tree = SymbolTypeTree::Array(Box::new(SymbolTypeTree::Usint), size);
-            println!("Dynamic symbol deserialisation is unsupported for arrays");
+            println!(
+                "Warn: Dynamic symbol deserialisation is unsupported for arrays, converting to"
+            );
         }
     }
 

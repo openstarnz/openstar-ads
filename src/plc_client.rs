@@ -3,7 +3,18 @@ use std::collections::{hash_map::Entry, HashMap};
 use ads::{symbol::get_symbol_info, AmsAddr, Client, Device, Handle, Result};
 use crossbeam_channel::Receiver;
 
-use crate::data_types::{symbol_type_tree::SymbolTypeTree, PlcDataType};
+use crate::data_types::{
+    symbol_type_tree::{SymbolTypeTree, SymbolTypeTreeError},
+    PlcDataType,
+};
+
+#[derive(Debug, thiserror::Error)]
+pub enum PlcClientError {
+    #[error("PLC Client had ADS error {0}")]
+    AdsError(#[from] ads::Error),
+    #[error("Symbol Type Tree error {0}")]
+    SymbolTypeTreeError(#[from] SymbolTypeTreeError),
+}
 
 pub struct PlcClient {
     safe_cell: PlcClientSelfCell,
@@ -218,7 +229,10 @@ impl PlcClient {
         Ok(notification_handle)
     }
 
-    pub fn get_dynamic_type_tree(&mut self, name: &str) -> Result<SymbolTypeTree> {
+    pub fn get_dynamic_type_tree(
+        &mut self,
+        name: &str,
+    ) -> std::result::Result<SymbolTypeTree, PlcClientError> {
         let (symbols, type_map) = get_symbol_info(self.device())?;
         let mut symbol = None;
 
@@ -237,7 +251,7 @@ impl PlcClient {
             Err(err) => {
                 println!("Error when getting symbol type from type map {err:?}");
                 return Ok(SymbolTypeTree::Unknown(symbol.size));
-            },
+            }
         };
 
         Ok(symbol_type_tree)
