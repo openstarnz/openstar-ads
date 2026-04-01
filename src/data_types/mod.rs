@@ -40,12 +40,12 @@ mod tests {
         numbers_symbol_map.insert("linteger".to_string(), (SymbolTypeTree::Lint, Some(16)));
         numbers_symbol_map.insert("ulinteger".to_string(), (SymbolTypeTree::Ulint, Some(24)));
 
-        data.append(&mut (-123 as i16).to_le_bytes().to_vec());
+        data.append(&mut (-123_i16).to_le_bytes().to_vec());
         data.append(&mut 123u16.to_le_bytes().to_vec());
-        data.append(&mut (-123456 as i32).to_le_bytes().to_vec());
+        data.append(&mut (-123456_i32).to_le_bytes().to_vec());
         data.append(&mut 123456u32.to_le_bytes().to_vec());
         data.append(&mut 0u32.to_le_bytes().to_vec());
-        data.append(&mut (-123456789 as i64).to_le_bytes().to_vec());
+        data.append(&mut (-123456789_i64).to_le_bytes().to_vec());
         data.append(&mut 123456789u64.to_le_bytes().to_vec());
 
         let symbol_type_tree = SymbolTypeTree::Struct(numbers_symbol_map, size);

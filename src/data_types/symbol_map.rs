@@ -121,11 +121,11 @@ impl SymbolTypeMapExt for SymbolTypeMap {
                 } else {
                     for (child_path, (child_tree, child_offset)) in index_map {
                         if let Some(child_offset) = child_offset {
-                            if path == "" {
+                            if path.is_empty() {
                                 map.append(&mut SymbolTypeMap::from_tree(
                                     child_tree,
                                     offset + child_offset,
-                                    format!("{child_path}"),
+                                    child_path.to_string(),
                                 ));
                             } else {
                                 map.append(&mut SymbolTypeMap::from_tree(

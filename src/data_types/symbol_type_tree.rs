@@ -116,7 +116,7 @@ fn try_from_type_or_field(
         let tree_type = type_map
             .get(type_name)
             .ok_or_else(|| SymbolTypeTreeError::MissingSymbolTypeInfo(type_name.to_string()))?;
-        if tree_type.fields.len() > 0 {
+        if !tree_type.fields.is_empty() {
             let mut struct_map = IndexMap::new();
 
             for field in &tree_type.fields {

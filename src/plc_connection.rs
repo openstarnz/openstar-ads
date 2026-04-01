@@ -256,7 +256,7 @@ impl PlcConnection {
             for sample in notif.samples() {
                 if sample.handle == notif_handle {
                     let symbol_tree: SymbolMap =
-                        SymbolMap::from_bytes(&symbol_type_map, sample.data).into();
+                        SymbolMap::from_bytes(&symbol_type_map, sample.data);
                     // If there is an error sending it means that all receivers are gone and therefore this thread has successfully ended.
                     if let Err(_err) = sender_channel.send(symbol_tree) {
                         return Ok(Some(()));
