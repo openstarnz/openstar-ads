@@ -157,7 +157,7 @@ impl PlcConnection {
         &self,
         name: String,
         symbol_type_tree: SymbolTypeTree,
-        sender_channel: Sender<SymbolTree>,
+        sender_channel: broadcast::Sender<SymbolTree>,
     ) -> Result<Option<()>> {
         let mut notif_handle = None;
         {
@@ -181,7 +181,7 @@ impl PlcConnection {
             }
         }
 
-        let Some(notif_receiver) = self.notification_receiver() else {
+        let Some(mut notif_receiver) = self.notification_receiver() else {
             return Ok(None);
         };
 
@@ -190,7 +190,13 @@ impl PlcConnection {
         };
 
         // Runs the actual notification loop which filters for the correct symbol handle.
-        for notif in notif_receiver {
+        loop {
+            let resp =
+                tokio::task::spawn_blocking(move || Self::recv_blocking(notif_receiver)).await.context("Tokio spawn blocking function failed while trying to receive from PLC channel.")?;
+            notif_receiver = resp.0;
+            let notif_result = resp.1;
+            let notif = notif_result
+                .context("Receive error while receiving from PLC notification channel.")?;
             for sample in notif.samples() {
                 if sample.handle == notif_handle {
                     let symbol_tree: SymbolTree = (&symbol_type_tree, sample.data, 0).into();
@@ -201,8 +207,6 @@ impl PlcConnection {
                 }
             }
         }
-
-        Ok(Some(()))
     }
 
     /// Gets a symbol type tree for a given symbol path.
