@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context, Result};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Receiver;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     sync::{Arc, Mutex},
@@ -104,6 +104,7 @@ impl PlcConnection {
         }
     }
 
+    /// Disconnects the internal PLC client
     pub fn disconnect(&self) {
         let mut plc_connection_state = self.state.lock().unwrap();
 
@@ -122,6 +123,7 @@ impl PlcConnection {
     /// Gets a symbol type tree for a given symbol path.
     ///
     /// Returns None if the PLC is not connected.
+    /// Returns any errors from the PLC
     pub fn get_dynamic_type_tree(&self, name: &str) -> Result<Option<SymbolTypeTree>> {
         let mut plc_connection_state = self.state.lock().unwrap();
 
@@ -150,9 +152,10 @@ impl PlcConnection {
         Ok(None)
     }
 
-    /// Gets a symbol type tree for a given symbol path.
+    /// Subscribes to the given symbol using the symbol type tree and sends deserialised tree-like data back with the sender channel.
     ///
     /// Returns None if the PLC is not connected.
+    /// Returns any errors from the PLC.
     pub async fn start_dynamic_symbol_receiver(
         &self,
         name: String,
@@ -209,9 +212,11 @@ impl PlcConnection {
         }
     }
 
-    /// Gets a symbol type tree for a given symbol path.
+    /// Subscribes to the given symbol using the symbol type tree and sends deserialised flattened map data back with the sender channel.
+    /// The key to the map is the path of the symbol relative to the named symbol provided.
     ///
     /// Returns None if the PLC is not connected.
+    /// Returns any errors from the PLC.
     pub async fn start_dynamic_symbol_map_receiver(
         &self,
         name: String,
@@ -267,7 +272,6 @@ impl PlcConnection {
                     };
                 }
             }
-            // tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
 

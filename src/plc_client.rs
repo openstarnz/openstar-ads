@@ -50,6 +50,8 @@ impl<'c> PlcDevice<'c> {
     }
 }
 
+/// Provides a more user friendly wrapper to the Client, Device, and Handle objects from ads. Handles all of the necessary calls to
+/// the underlying types and internal offsets required to talk to an ADS device.
 impl PlcClient {
     pub fn new(ads_client: Client, plc_ams_address: AmsAddr) -> Self {
         let safe_cell = PlcClientSelfCell::new(ads_client, |ads_client| PlcDevice {
@@ -67,21 +69,23 @@ impl PlcClient {
         self.safe_cell.borrow_owner()
     }
 
-    fn device(&self) -> Device {
+    fn device(&'_ self) -> Device<'_> {
         self.safe_cell.borrow_dependent().device
     }
 
-    fn handle(&mut self, name: &str) -> Result<&Handle> {
+    fn handle(&'_ mut self, name: &str) -> Result<&'_ Handle<'_>> {
         self.safe_cell
             .with_dependent_mut(|_, plc_device| plc_device.handle(name))
     }
 
+    /// Returns if the connected ADS device is in run mode.
     pub fn is_run_mode(&self) -> Result<bool> {
         let (state, _) = self.device().get_state()?;
 
         Ok(state == ads::AdsState::Run)
     }
 
+    /// Attempts to set the ADS device into run mode if it is not already in it.
     pub fn set_to_run_mode(&self) -> Result<()> {
         let device = self.device();
 
@@ -104,6 +108,7 @@ impl PlcClient {
         Ok(())
     }
 
+    /// Read the value of a symbol with a given type once.
     pub fn read_symbol<T: PlcDataType>(&mut self, name: &str) -> Result<T> {
         let handle = self.handle(name)?;
 
@@ -120,6 +125,7 @@ impl PlcClient {
         Ok(read_data)
     }
 
+    /// Invokes a PLC method with no parameters, which has the attribute 'TcRpcEnable'.
     pub fn invoke_rpc_method(&mut self, name: &str) -> Result<()> {
         let handle = self.handle(name)?;
 
@@ -135,6 +141,7 @@ impl PlcClient {
         Ok(())
     }
 
+    /// Invokes a PLC method with one parameter, which has the attribute 'TcRpcEnable'.
     pub fn invoke_rpc_method_with_param<P: PlcDataType>(
         &mut self,
         name: &str,
@@ -157,6 +164,7 @@ impl PlcClient {
     }
 
     // TODO: there must be a more generic way to handle this
+    /// Invokes a PLC method with three parameters, which has the attribute 'TcRpcEnable'.
     pub fn invoke_rpc_method_with_three_params<
         P1: PlcDataType,
         P2: PlcDataType,
@@ -187,6 +195,7 @@ impl PlcClient {
         Ok(())
     }
 
+    /// Invokes a PLC method with no parameters, which has the attribute 'TcRpcEnable', and returns the resulting value.
     pub fn fetch_from_rpc_method<T: PlcDataType>(&mut self, name: &str) -> Result<T> {
         let handle = self.handle(name)?;
 
@@ -204,6 +213,7 @@ impl PlcClient {
         Ok(read_data)
     }
 
+    /// Subscribes to a symbol and returns the handle as a u32.
     pub fn subscribe<T: PlcDataType>(&mut self, name: &str) -> Result<u32> {
         let notification_handle = {
             let handle = self.handle(name)?;
@@ -229,6 +239,7 @@ impl PlcClient {
         Ok(notification_handle)
     }
 
+    /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
     pub fn get_dynamic_type_tree(
         &mut self,
         name: &str,
@@ -257,6 +268,7 @@ impl PlcClient {
         Ok(symbol_type_tree)
     }
 
+    /// Subscribes to a symbol based off of its type tree and returns the handle as a u32.
     pub fn add_dynamic_symbol_notification(
         &mut self,
         name: &str,
@@ -280,16 +292,19 @@ impl PlcClient {
         Ok(notif_handle)
     }
 
+    /// Get a crossbeam channel receiver for all ADS notifications.
     pub fn notification_receiver(&self) -> Receiver<ads::notif::Notification> {
         self.ads_client().get_notification_channel()
     }
 
+    /// Deletes an ongoing subscription using its handle.
     pub fn unsubscribe(&self, notification_handle: u32) {
         // NB: unsure why, but deleting the notification returns a "Notification handle is invalid" error, hence the ok() here.
         // It still works though, so maybe not a problem.
         self.device().delete_notification(notification_handle).ok();
     }
 
+    /// Deletes all ongoing symbol subscriptions.
     pub fn unsubscribe_all(&mut self) {
         for notification_handle in &self.notification_handles {
             self.unsubscribe(*notification_handle);
