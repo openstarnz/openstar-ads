@@ -5,10 +5,19 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::sync::broadcast;
 
 use ads::{AmsAddr, Client};
 
-use crate::{data_types::PlcDataType, plc_client::PlcClient};
+use crate::{
+    data_types::{
+        symbol_map::{SymbolMap, SymbolMapExt, SymbolTypeMap, SymbolTypeMapExt},
+        symbol_tree::SymbolTree,
+        symbol_type_tree::SymbolTypeTree,
+        PlcDataType,
+    },
+    plc_client::PlcClient,
+};
 
 #[derive(Clone)]
 pub struct PlcConnection {
@@ -95,6 +104,7 @@ impl PlcConnection {
         }
     }
 
+    /// Disconnects the internal PLC client
     pub fn disconnect(&self) {
         let mut plc_connection_state = self.state.lock().unwrap();
 
@@ -108,6 +118,179 @@ impl PlcConnection {
             PlcConnectionState::Connected(_) => true,
             PlcConnectionState::Disconnected => false,
         }
+    }
+
+    /// Gets a symbol type tree for a given symbol path.
+    ///
+    /// Returns None if the PLC is not connected.
+    /// Returns any errors from the PLC
+    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<Option<SymbolTypeTree>> {
+        let mut plc_connection_state = self.state.lock().unwrap();
+
+        if let Some(client) = plc_connection_state.client_mut() {
+            let type_tree = client.get_dynamic_type_tree(name).map_err(|error| {
+                println!(
+                    "PLC client error when getting information for symbol {}: {}",
+                    name, error
+                );
+
+                match &error {
+                    crate::plc_client::PlcClientError::AdsError(error) => {
+                        plc_connection_state.handle_disconnect_error(error)
+                    }
+                    crate::plc_client::PlcClientError::SymbolTypeTreeError(
+                        _symbol_type_tree_error,
+                    ) => plc_connection_state.disconnect(),
+                };
+
+                error
+            })?;
+
+            return Ok(Some(type_tree));
+        }
+
+        Ok(None)
+    }
+
+    /// Subscribes to the given symbol using the symbol type tree and sends deserialised tree-like data back with the sender channel.
+    ///
+    /// Returns None if the PLC is not connected.
+    /// Returns any errors from the PLC.
+    pub async fn start_dynamic_symbol_receiver(
+        &self,
+        name: String,
+        symbol_type_tree: SymbolTypeTree,
+        sender_channel: broadcast::Sender<SymbolTree>,
+    ) -> Result<Option<()>> {
+        let mut notif_handle = None;
+        {
+            let mut plc_connection_state = self.state.lock().unwrap();
+
+            if let Some(client) = plc_connection_state.client_mut() {
+                notif_handle = Some(
+                    client
+                        .add_dynamic_symbol_notification(&name, &symbol_type_tree)
+                        .map_err(|error| {
+                            println!(
+                                "PLC client error when getting information for symbol {}: {}",
+                                name, error
+                            );
+
+                            plc_connection_state.handle_disconnect_error(&error);
+
+                            error
+                        })?,
+                );
+            }
+        }
+
+        let Some(mut notif_receiver) = self.notification_receiver() else {
+            return Ok(None);
+        };
+
+        let Some(notif_handle) = notif_handle else {
+            return Ok(None);
+        };
+
+        // Runs the actual notification loop which filters for the correct symbol handle.
+        loop {
+            let resp =
+                tokio::task::spawn_blocking(move || Self::recv_blocking(notif_receiver)).await.context("Tokio spawn blocking function failed while trying to receive from PLC channel.")?;
+            notif_receiver = resp.0;
+            let notif_result = resp.1;
+            let notif = notif_result
+                .context("Receive error while receiving from PLC notification channel.")?;
+            for sample in notif.samples() {
+                if sample.handle == notif_handle {
+                    let symbol_tree: SymbolTree = (&symbol_type_tree, sample.data, 0).into();
+                    // If there is an error sending it means that all receivers are gone and therefore this thread has successfully ended.
+                    if let Err(_err) = sender_channel.send(symbol_tree) {
+                        return Ok(Some(()));
+                    };
+                }
+            }
+        }
+    }
+
+    /// Subscribes to the given symbol using the symbol type tree and sends deserialised flattened map data back with the sender channel.
+    /// The key to the map is the path of the symbol relative to the named symbol provided.
+    ///
+    /// Returns None if the PLC is not connected.
+    /// Returns any errors from the PLC.
+    pub async fn start_dynamic_symbol_map_receiver(
+        &self,
+        name: String,
+        symbol_type_tree: SymbolTypeTree,
+        sender_channel: broadcast::Sender<SymbolMap>,
+    ) -> Result<Option<()>> {
+        let mut notif_handle = None;
+        {
+            let mut plc_connection_state = self.state.lock().unwrap();
+
+            if let Some(client) = plc_connection_state.client_mut() {
+                notif_handle = Some(
+                    client
+                        .add_dynamic_symbol_notification(&name, &symbol_type_tree)
+                        .map_err(|error| {
+                            println!(
+                                "PLC client error when getting information for symbol {}: {}",
+                                name, error
+                            );
+
+                            plc_connection_state.handle_disconnect_error(&error);
+
+                            error
+                        })?,
+                );
+            }
+        }
+
+        let Some(mut notif_receiver) = self.notification_receiver() else {
+            return Ok(None);
+        };
+
+        let Some(notif_handle) = notif_handle else {
+            return Ok(None);
+        };
+
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
+        // Runs the actual notification loop which filters for the correct symbol handle.
+        loop {
+            let resp =
+                tokio::task::spawn_blocking(move || Self::recv_blocking(notif_receiver)).await.context("Tokio spawn blocking function failed while trying to receive from PLC channel.")?;
+            notif_receiver = resp.0;
+            let notif_result = resp.1;
+            let notif = notif_result
+                .context("Receive error while receiving from PLC notification channel.")?;
+            for sample in notif.samples() {
+                if sample.handle == notif_handle {
+                    let symbol_tree: SymbolMap =
+                        SymbolMap::from_bytes(&symbol_type_map, sample.data);
+                    // If there is an error sending it means that all receivers are gone and therefore this thread has successfully ended.
+                    if let Err(_err) = sender_channel.send(symbol_tree) {
+                        return Ok(Some(()));
+                    };
+                }
+            }
+        }
+    }
+
+    // Fully takes ownership of the receiver so that this can be run within a spawn_blocking enclosure.
+    // Returns out the channel again with the result so that the caller can ensure the channel can be used again by awaiting the response.
+    fn recv_blocking<T>(channel: Receiver<T>) -> (Receiver<T>, Result<T>) {
+        let result = channel.recv_timeout(std::time::Duration::from_secs(5));
+        let value = match result {
+            Ok(value) => anyhow::Result::Ok(value),
+            Err(err) => match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    anyhow::Result::Err(anyhow!("Message took more than 5 seconds to receive."))
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    anyhow::Result::Err(anyhow!("PLC channel closed."))
+                }
+            },
+        };
+        (channel, value)
     }
 
     /// Read a symbol from the PLC.
