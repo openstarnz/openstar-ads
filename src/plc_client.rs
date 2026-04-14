@@ -1,93 +1,94 @@
-use std::collections::{hash_map::Entry, HashMap};
-
-use ads::{symbol::get_symbol_info, AmsAddr, Client, Device, Handle, Result};
 use crossbeam_channel::Receiver;
+use std::collections::HashMap;
 
-use crate::data_types::{
-    symbol_type_tree::{SymbolTypeTree, SymbolTypeTreeError},
-    PlcDataType,
+use crate::{
+    data_types::{
+        symbol_type_tree::{SymbolTypeTree, SymbolTypeTreeError},
+        PlcDataType,
+    },
+    PlcParams,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum PlcClientError {
     #[error("PLC Client had ADS error {0}")]
-    AdsError(#[from] ads::Error),
+    Ads(#[from] ads::Error),
+
     #[error("Symbol Type Tree error {0}")]
-    SymbolTypeTreeError(#[from] SymbolTypeTreeError),
+    SymbolTypeTree(#[from] SymbolTypeTreeError),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct SymbolHandle(u32);
+
+impl SymbolHandle {
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct NotificationHandle(u32);
+
+impl NotificationHandle {
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
 }
 
 pub struct PlcClient {
-    safe_cell: PlcClientSelfCell,
-    notification_handles: Vec<u32>,
-}
-
-// Using self_cell here so we can create a struct that owns an ads Client, Device, and set of Handles. It would not be possible
-// otherwise as the Device and Handles must refer to the Client, and Rust does not make it easy to create self-referrential structs
-// TODO: long term we should investigate the ads crate and find a better solution without self_cell
-self_cell::self_cell!(
-    struct PlcClientSelfCell {
-        owner: Client,
-
-        #[covariant]
-        dependent: PlcDevice,
-    }
-);
-
-struct PlcDevice<'c> {
-    device: Device<'c>,
-    handles: HashMap<String, Handle<'c>>,
-}
-
-impl<'c> PlcDevice<'c> {
-    fn handle(&mut self, name: &str) -> Result<&Handle<'c>> {
-        // TODO: might need to think a bit more about other cases we may need to invalidate these handles e.g: new code flashed onto the PLC
-        let handle = match self.handles.entry(name.to_string()) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => entry.insert(Handle::new(self.device, name)?),
-        };
-
-        Ok(handle)
-    }
+    ads_client: ads::Client,
+    plc_ams_address: ads::AmsAddr,
+    symbol_handles: HashMap<String, SymbolHandle>,
+    notification_handles: Vec<NotificationHandle>,
 }
 
 /// Provides a more user friendly wrapper to the Client, Device, and Handle objects from ads. Handles all of the necessary calls to
 /// the underlying types and internal offsets required to talk to an ADS device.
 impl PlcClient {
-    pub fn new(ads_client: Client, plc_ams_address: AmsAddr) -> Self {
-        let safe_cell = PlcClientSelfCell::new(ads_client, |ads_client| PlcDevice {
-            device: ads_client.device(plc_ams_address),
-            handles: HashMap::default(),
-        });
-
+    pub fn new(ads_client: ads::Client, plc_ams_address: ads::AmsAddr) -> Self {
         Self {
-            safe_cell,
+            ads_client,
+            plc_ams_address,
+            symbol_handles: Default::default(),
             notification_handles: Default::default(),
         }
     }
 
-    fn ads_client(&self) -> &Client {
-        self.safe_cell.borrow_owner()
+    fn ads_client(&self) -> &ads::Client {
+        &self.ads_client
     }
 
-    fn device(&'_ self) -> Device<'_> {
-        self.safe_cell.borrow_dependent().device
+    fn ads_device<'a>(&'a self) -> ads::Device<'a> {
+        self.ads_client().device(self.plc_ams_address)
     }
 
-    fn handle(&'_ mut self, name: &str) -> Result<&'_ Handle<'_>> {
-        self.safe_cell
-            .with_dependent_mut(|_, plc_device| plc_device.handle(name))
+    fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle, PlcClientError> {
+        // TODO: might need to think a bit more about other cases we may need to invalidate these handles e.g: new code flashed onto the PLC
+        let handle = self.symbol_handles.get(symbol);
+        let handle = match handle {
+            Some(handle) => handle.to_owned(),
+            None => {
+                let handle_raw = ads::Handle::new(self.ads_device(), symbol)?.raw();
+                let handle = SymbolHandle(handle_raw);
+                self.symbol_handles.insert(symbol.to_owned(), handle);
+                handle
+            }
+        };
+
+        Ok(handle)
     }
 
     /// Returns if the connected ADS device is in run mode.
-    pub fn is_run_mode(&self) -> Result<bool> {
-        let (state, _) = self.device().get_state()?;
+    pub fn is_run_mode(&self) -> Result<bool, PlcClientError> {
+        let (state, _) = self.ads_device().get_state()?;
 
         Ok(state == ads::AdsState::Run)
     }
 
     /// Attempts to set the ADS device into run mode if it is not already in it.
-    pub fn set_to_run_mode(&self) -> Result<()> {
-        let device = self.device();
+    pub fn set_to_run_mode(&self) -> Result<(), PlcClientError> {
+        let device = self.ads_device();
 
         println!("Device Info: {:?}", device.get_info());
 
@@ -109,14 +110,12 @@ impl PlcClient {
     }
 
     /// Read the value of a symbol with a given type once.
-    pub fn read_symbol<T: PlcDataType>(&mut self, name: &str) -> Result<T> {
-        let handle = self.handle(name)?;
-
+    pub fn read_symbol<T: PlcDataType>(&self, symbol: &str) -> Result<T, PlcClientError> {
         let mut read_data = T::default();
 
-        let index_offset = handle.raw();
+        let index_offset = self.symbol_handle(symbol)?.as_u32();
 
-        self.device().read_exact(
+        self.ads_device().read_exact(
             ads::index::RW_SYMVAL_BYHANDLE,
             index_offset,
             read_data.as_bytes_mut(),
@@ -125,67 +124,16 @@ impl PlcClient {
         Ok(read_data)
     }
 
-    /// Invokes a PLC method with no parameters, which has the attribute 'TcRpcEnable'.
-    pub fn invoke_rpc_method(&mut self, name: &str) -> Result<()> {
-        let handle = self.handle(name)?;
-
-        let index_offset = handle.raw();
-
-        self.device().write_read_exact(
-            ads::index::RW_SYMVAL_BYHANDLE,
-            index_offset,
-            &[],
-            &mut [],
-        )?;
-
-        Ok(())
-    }
-
-    /// Invokes a PLC method with one parameter, which has the attribute 'TcRpcEnable'.
-    pub fn invoke_rpc_method_with_param<P: PlcDataType>(
+    /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters.
+    pub fn invoke_rpc_method<Params: PlcParams>(
         &mut self,
-        name: &str,
-        param: P,
-    ) -> Result<()> {
-        let handle = self.handle(name)?;
+        symbol: &str,
+        params: Params,
+    ) -> Result<(), PlcClientError> {
+        let index_offset = self.symbol_handle(symbol)?.as_u32();
+        let write_data = params.as_data();
 
-        let write_data = param.as_bytes();
-
-        let index_offset = handle.raw();
-
-        self.device().write_read_exact(
-            ads::index::RW_SYMVAL_BYHANDLE,
-            index_offset,
-            write_data,
-            &mut [],
-        )?;
-
-        Ok(())
-    }
-
-    // TODO: there must be a more generic way to handle this
-    /// Invokes a PLC method with three parameters, which has the attribute 'TcRpcEnable'.
-    pub fn invoke_rpc_method_with_three_params<
-        P1: PlcDataType,
-        P2: PlcDataType,
-        P3: PlcDataType,
-    >(
-        &mut self,
-        name: &str,
-        param_1: P1,
-        param_2: P2,
-        param_3: P3,
-    ) -> Result<()> {
-        let handle = self.handle(name)?;
-
-        let write_data_1 = param_1.as_bytes();
-        let write_data_2 = param_2.as_bytes();
-        let write_data_3 = param_3.as_bytes();
-        let write_data = [write_data_1, write_data_2, write_data_3].concat();
-
-        let index_offset = handle.raw();
-
-        self.device().write_read_exact(
+        self.ads_device().write_read_exact(
             ads::index::RW_SYMVAL_BYHANDLE,
             index_offset,
             &write_data,
@@ -195,32 +143,35 @@ impl PlcClient {
         Ok(())
     }
 
-    /// Invokes a PLC method with no parameters, which has the attribute 'TcRpcEnable', and returns the resulting value.
-    pub fn fetch_from_rpc_method<T: PlcDataType>(&mut self, name: &str) -> Result<T> {
-        let handle = self.handle(name)?;
+    /// Invokes a PLC method (which has the attribute 'TcRpcEnable') and returns the resulting value.
+    pub fn fetch_from_rpc_method<Params: PlcParams, Value: PlcDataType>(
+        &mut self,
+        symbol: &str,
+        params: Params,
+    ) -> Result<Value, PlcClientError> {
+        let index_offset = self.symbol_handle(symbol)?.as_u32();
+        let write_data = params.as_data();
+        let mut read_data = Value::default();
 
-        let mut read_data = T::default();
-
-        let index_offset = handle.raw();
-
-        self.device().write_read_exact(
+        self.ads_device().write_read_exact(
             ads::index::RW_SYMVAL_BYHANDLE,
             index_offset,
-            &[],
+            &write_data,
             read_data.as_bytes_mut(),
         )?;
 
         Ok(read_data)
     }
 
-    /// Subscribes to a symbol and returns the handle as a u32.
-    pub fn subscribe<T: PlcDataType>(&mut self, name: &str) -> Result<u32> {
-        let notification_handle = {
-            let handle = self.handle(name)?;
+    /// Subscribes to a symbol and returns the notification handle.
+    pub fn subscribe<T: PlcDataType>(
+        &mut self,
+        name: &str,
+    ) -> Result<NotificationHandle, PlcClientError> {
+        let notification_handle_raw = {
+            let index_offset = self.symbol_handle(name)?.as_u32();
 
-            let index_offset = handle.raw();
-
-            self.device().add_notification(
+            self.ads_device().add_notification(
                 ads::index::RW_SYMVAL_BYHANDLE,
                 index_offset,
                 &ads::notif::Attributes::new(
@@ -233,7 +184,7 @@ impl PlcClient {
                 ),
             )?
         };
-
+        let notification_handle = NotificationHandle(notification_handle_raw);
         self.notification_handles.push(notification_handle);
 
         Ok(notification_handle)
