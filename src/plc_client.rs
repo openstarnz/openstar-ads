@@ -191,11 +191,8 @@ impl PlcClient {
     }
 
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
-    pub fn get_dynamic_type_tree(
-        &mut self,
-        name: &str,
-    ) -> std::result::Result<SymbolTypeTree, PlcClientError> {
-        let (symbols, type_map) = get_symbol_info(self.device())?;
+    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTree, PlcClientError> {
+        let (symbols, type_map) = ads::symbol::get_symbol_info(self.ads_device())?;
         let mut symbol = None;
 
         for symbol_info in symbols {
@@ -222,14 +219,12 @@ impl PlcClient {
     /// Subscribes to a symbol based off of its type tree and returns the handle as a u32.
     pub fn add_dynamic_symbol_notification(
         &mut self,
-        name: &str,
+        symbol: &str,
         symbol_type_tree: &SymbolTypeTree,
-    ) -> Result<u32> {
-        let handle = self.handle(name)?;
+    ) -> Result<u32, PlcClientError> {
+        let index_offset = self.symbol_handle(symbol)?.as_u32();
 
-        let index_offset = handle.raw();
-
-        let notif_handle = self.device().add_notification(
+        let notif_handle = self.ads_device().add_notification(
             ads::index::RW_SYMVAL_BYHANDLE,
             index_offset,
             &ads::notif::Attributes::new(

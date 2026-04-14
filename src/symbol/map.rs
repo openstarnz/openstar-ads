@@ -5,7 +5,8 @@ use indexmap::IndexMap;
 use serde::Serialize;
 use zerocopy::FromBytes;
 
-use crate::data_types::symbol_type_tree::SymbolTypeTree;
+use crate::SymbolTypeTree;
+
 pub type SymbolPath = String;
 pub type SymbolOffset = u32;
 pub type SymbolMap = IndexMap<SymbolPath, PrimitiveValue>;

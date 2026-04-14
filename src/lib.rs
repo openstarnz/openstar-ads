@@ -8,5 +8,7 @@ pub mod plc_client;
 pub mod plc_connection;
 
 mod params;
+mod symbol;
 
 pub use self::params::*;
+pub use self::symbol::*;
