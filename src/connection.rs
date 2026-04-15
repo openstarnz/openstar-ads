@@ -1,8 +1,10 @@
-use ads_client::AdsTimeout;
+use ads_client as ads;
 use std::time::Duration;
 
-enum PlcConnection {
-    Connected(ads_client::Client),
+use crate::{PlcClient, PlcError, Result};
+
+pub enum PlcConnection {
+    Connected(PlcClient),
     Disconnected,
 }
 
@@ -13,45 +15,45 @@ impl Default for PlcConnection {
 }
 
 impl PlcConnection {
-    fn connect(
+    pub async fn connect(
         &mut self,
-        addr: String,
+        addr: &str,
         port: u16,
-        timeout: Option<AdsTimeout>,
+        timeout: Option<ads::AdsTimeout>,
         retry_delay: Option<Duration>,
         set_to_run_mode: bool,
-    ) -> Result<(), PlcError> {
+    ) -> Result<()> {
         match self {
             PlcConnection::Connected(_) => {
                 println!("Attempted to connect to PLC but it is already connected!")
             }
             PlcConnection::Disconnected => {
-                let ams_source: ads::Source =
-                    local_ams_address.map_or(ads::Source::Request, ads::Source::Addr);
+                let mut ads_client_builder =
+                    ads::ClientBuilder::new(addr, port).set_retry_delay(retry_delay);
+                if let Some(timeout) = timeout {
+                    ads_client_builder = ads_client_builder.set_timeout(timeout);
+                }
+                let ads_client = ads_client_builder.build().await?;
+                let client = PlcClient::new(ads_client);
 
-                let mut timeouts = ads::Timeouts::new(Duration::from_millis(1000));
-                timeouts.read = Some(Duration::from_millis(2000));
-
-                let ads_client = Client::new(ads_router_address, timeouts, ams_source)?;
-
-                let plc_client = PlcClient::new(ads_client, plc_ams_address);
-
-                if !plc_client.is_run_mode()? && set_to_run_mode {
-                    plc_client.set_to_run_mode()?;
+                if !client.is_run_mode()? && set_to_run_mode {
+                    client.set_to_run_mode()?;
                 }
 
-                if !plc_client.is_run_mode()? {
-                    return Err(anyhow!("PLC not in run mode, stopping connection."));
+                if !client.is_run_mode()? {
+                    return Err(PlcError::Other(
+                        "PLC not in run mode, stopping connection.".to_owned(),
+                    ));
                 }
 
-                *self = PlcConnection::Connected(plc_client);
+                *self = PlcConnection::Connected(client);
             }
         }
 
         Ok(())
     }
 
-    fn disconnect(&mut self) {
+    pub fn disconnect(&mut self) {
         match self {
             PlcConnection::Connected(plc_client) => {
                 plc_client.unsubscribe_all();
@@ -66,26 +68,30 @@ impl PlcConnection {
         }
     }
 
-    fn client(&self) -> Option<&PlcClient> {
+    pub fn client(&self) -> Option<&PlcClient> {
         match self {
             PlcConnection::Connected(plc_client) => Some(plc_client),
             PlcConnection::Disconnected => None,
         }
     }
 
-    fn client_mut(&mut self) -> Option<&mut PlcClient> {
+    pub fn client_mut(&mut self) -> Option<&mut PlcClient> {
         match self {
             PlcConnection::Connected(plc_client) => Some(plc_client),
             PlcConnection::Disconnected => None,
         }
     }
 
-    fn handle_disconnect_error(&mut self, error: &ads::Error) {
+    pub fn handle_disconnect_error(&mut self, error: &PlcError) {
+        // TODO(mw): We should have a think about this.
         let should_disconnect = matches!(
             error,
-            ads::Error::Io(_, _)
-                | ads::Error::Ads(_, _, 0x006)
-                | ads::Error::Reply(_, "unexpected invoke ID", _)
+            PlcError::Io(_, _)
+                | PlcError::Ads(ads::AdsError {
+                    n_error: 0x006,
+                    s_msg: _
+                })
+                | PlcError::Reply(_, "unexpected invoke ID", _) // TODO(mw): This is a hangover from the ads library, we should probably remove.
         );
 
         if should_disconnect {

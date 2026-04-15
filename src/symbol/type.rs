@@ -487,7 +487,7 @@ pub fn decode_symbol_info(
         let mut buf = [0; 1024];
         let version = ptr.read_u32::<LE>().ctx(ctx)?;
         if version != 1 {
-            return Err(Error::Reply(ctx, "unknown type info version", version));
+            return Err(PlcError::Reply(ctx, "unknown type info version", version));
         }
         let _subitem_index = ptr.read_u16::<LE>().ctx(ctx)?;
         let _plc_interface_id = ptr.read_u16::<LE>().ctx(ctx)?;
@@ -632,7 +632,7 @@ pub fn get_type_info_by_name(device: Device<'_>, type_name: &str) -> Result<Type
     )?;
     let data = &read_data[..n];
     if data.len() < 4 {
-        return Err(Error::Reply(
+        return Err(PlcError::Reply(
             "get type info by name",
             "response too short",
             data.len() as u32,

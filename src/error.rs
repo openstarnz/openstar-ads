@@ -17,6 +17,9 @@ pub enum PlcError {
 
     #[error("Symbol Type Tree error {0}")]
     SymbolTypeTree(#[from] SymbolTypeTreeError),
+
+    #[error("{0}")]
+    Other(String),
 }
 
 pub type Result<T> = std::result::Result<T, PlcError>;

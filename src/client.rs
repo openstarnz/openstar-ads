@@ -4,10 +4,7 @@ use std::{collections::HashMap, time::Duration};
 
 pub use ads::AdsTimeout;
 
-use crate::{
-    plc_connection::PlcConnection, PlcDataType, PlcError, PlcParams, SymbolTypeTree,
-    SymbolTypeTreeError,
-};
+use crate::{PlcConnection, PlcDataType, PlcError, PlcParams, SymbolTypeTree, SymbolTypeTreeError};
 
 #[derive(Debug, Copy, Clone)]
 pub struct SymbolHandle(u32);
@@ -47,6 +44,21 @@ impl PlcClient {
         }
     }
 
+    async fn print_device_info(&self) {
+        let device_info = self.ads_client.read_device_info().await?;
+
+        println!(
+            "DeviceInfo: TwinCAT {}.{}.{} , Device Name: {}",
+            device_info.major, device_info.minor, device_info.build, device_info.device_name
+        );
+    }
+
+    async fn print_state(&self) {
+        let state = self.ads_client.read_state().await?;
+
+        println!("State: {:?}", state);
+    }
+
     async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle, PlcError> {
         let mut read_data = [0; GET_SYMHANDLE_BYNAME_LEN];
         let write_data = symbol.as_bytes();
@@ -59,7 +71,6 @@ impl PlcClient {
     }
 
     async fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle, PlcError> {
-        // TODO: ensure this cache is reset when PLC is reset
         let handle = self.symbol_handles.get(symbol);
         let handle = match handle {
             Some(handle) => handle.to_owned(),
@@ -93,10 +104,9 @@ impl PlcClient {
     }
 
     /// Returns if the connected ADS device is in run mode.
-    pub fn is_run_mode(&self) -> Result<bool, PlcError> {
-        let (state, _) = self.ads_device().get_state()?;
-
-        Ok(state == ads::AdsState::Run)
+    pub async fn is_run_mode(&self) -> Result<bool, PlcError> {
+        let state_info = self.ads_client.read_state().await?;
+        Ok(state_info.ads_state == ads::AdsState::Run)
     }
 
     /// Attempts to set the ADS device into run mode if it is not already in it.
