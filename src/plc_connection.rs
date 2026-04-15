@@ -16,7 +16,7 @@ use crate::{
         symbol_type_tree::SymbolTypeTree,
         PlcDataType,
     },
-    plc_client::PlcClient,
+    plc::PlcClient,
 };
 
 #[derive(Clone)]
@@ -135,12 +135,12 @@ impl PlcConnection {
                 );
 
                 match &error {
-                    crate::plc_client::PlcClientError::AdsError(error) => {
+                    crate::plc::PlcClientError::AdsError(error) => {
                         plc_connection_state.handle_disconnect_error(error)
                     }
-                    crate::plc_client::PlcClientError::SymbolTypeTreeError(
-                        _symbol_type_tree_error,
-                    ) => plc_connection_state.disconnect(),
+                    crate::plc::PlcClientError::SymbolTypeTreeError(_symbol_type_tree_error) => {
+                        plc_connection_state.disconnect()
+                    }
                 };
 
                 error

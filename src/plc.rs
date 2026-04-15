@@ -1,18 +1,16 @@
+use ads_client as ads;
+use bon::bon;
 use crossbeam_channel::Receiver;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
-use crate::{
-    data_types::{
-        symbol_type_tree::{SymbolTypeTree, SymbolTypeTreeError},
-        PlcDataType,
-    },
-    PlcParams,
-};
+pub use ads::AdsTimeout;
+
+use crate::{PlcDataType, PlcParams, SymbolTypeTree, SymbolTypeTreeError};
 
 #[derive(Debug, thiserror::Error)]
-pub enum PlcClientError {
-    #[error("PLC Client had ADS error {0}")]
-    Ads(#[from] ads::Error),
+pub enum PlcError {
+    #[error("ADS error {0}")]
+    Ads(#[from] ads::AdsError),
 
     #[error("Symbol Type Tree error {0}")]
     SymbolTypeTree(#[from] SymbolTypeTreeError),
@@ -36,34 +34,55 @@ impl NotificationHandle {
     }
 }
 
-pub struct PlcClient {
-    ads_client: ads::Client,
-    plc_ams_address: ads::AmsAddr,
+pub struct Plc {
+    addr: String,
+    port: u16,
+    timeout: Option<AdsTimeout>,
+    retry_delay: Option<Duration>,
+    ads_client: Option<ads_client::Client>,
     symbol_handles: HashMap<String, SymbolHandle>,
     notification_handles: Vec<NotificationHandle>,
 }
 
-/// Provides a more user friendly wrapper to the Client, Device, and Handle objects from ads. Handles all of the necessary calls to
-/// the underlying types and internal offsets required to talk to an ADS device.
-impl PlcClient {
-    pub fn new(ads_client: ads::Client, plc_ams_address: ads::AmsAddr) -> Self {
+/// Provides a more user friendly wrapper to interact with the OpenStar PLC's.
+#[bon]
+impl Plc {
+    #[builder]
+    pub fn new(
+        addr: String,
+        port: u16,
+        timeout: Option<AdsTimeout>,
+        retry_delay: Option<Duration>,
+        set_to_run_mode: bool,
+    ) -> Self {
         Self {
-            ads_client,
-            plc_ams_address,
+            addr,
+            port,
+            timeout,
+            retry_delay,
+            ads_client: None,
             symbol_handles: Default::default(),
             notification_handles: Default::default(),
         }
     }
 
-    fn ads_client(&self) -> &ads::Client {
-        &self.ads_client
+    async fn ads_client(&self) -> Result<&ads::Client, PlcError> {
+        let Some(client) = self.ads_client else {
+            let mut builder = ads::ClientBuilder::new(&self.addr, self.port);
+            if let Some(timeout) = self.timeout {
+                builder = builder.set_timeout(timeout);
+            };
+            if let Some(retry_delay) = self.retry_delay {
+                builder = builder.set_retry_delay(Some(retry_delay));
+            };
+            let client = builder.build().await?;
+            self.ads_client = Some(client);
+            return Ok(&client);
+        };
+        Ok(&client)
     }
 
-    fn ads_device<'a>(&'a self) -> ads::Device<'a> {
-        self.ads_client().device(self.plc_ams_address)
-    }
-
-    fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle, PlcClientError> {
+    fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle, PlcError> {
         // TODO: might need to think a bit more about other cases we may need to invalidate these handles e.g: new code flashed onto the PLC
         let handle = self.symbol_handles.get(symbol);
         let handle = match handle {
@@ -80,14 +99,14 @@ impl PlcClient {
     }
 
     /// Returns if the connected ADS device is in run mode.
-    pub fn is_run_mode(&self) -> Result<bool, PlcClientError> {
+    pub fn is_run_mode(&self) -> Result<bool, PlcError> {
         let (state, _) = self.ads_device().get_state()?;
 
         Ok(state == ads::AdsState::Run)
     }
 
     /// Attempts to set the ADS device into run mode if it is not already in it.
-    pub fn set_to_run_mode(&self) -> Result<(), PlcClientError> {
+    pub fn set_to_run_mode(&self) -> Result<(), PlcError> {
         let device = self.ads_device();
 
         println!("Device Info: {:?}", device.get_info());
@@ -110,7 +129,7 @@ impl PlcClient {
     }
 
     /// Read the value of a symbol with a given type once.
-    pub fn read_symbol<T: PlcDataType>(&self, symbol: &str) -> Result<T, PlcClientError> {
+    pub fn read_symbol<T: PlcDataType>(&self, symbol: &str) -> Result<T, PlcError> {
         let mut read_data = T::default();
 
         let index_offset = self.symbol_handle(symbol)?.as_u32();
@@ -129,7 +148,7 @@ impl PlcClient {
         &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<(), PlcClientError> {
+    ) -> Result<(), PlcError> {
         let index_offset = self.symbol_handle(symbol)?.as_u32();
         let write_data = params.as_data();
 
@@ -148,7 +167,7 @@ impl PlcClient {
         &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<Value, PlcClientError> {
+    ) -> Result<Value, PlcError> {
         let index_offset = self.symbol_handle(symbol)?.as_u32();
         let write_data = params.as_data();
         let mut read_data = Value::default();
@@ -167,7 +186,7 @@ impl PlcClient {
     pub fn subscribe<T: PlcDataType>(
         &mut self,
         name: &str,
-    ) -> Result<NotificationHandle, PlcClientError> {
+    ) -> Result<NotificationHandle, PlcError> {
         let notification_handle_raw = {
             let index_offset = self.symbol_handle(name)?.as_u32();
 
@@ -191,7 +210,7 @@ impl PlcClient {
     }
 
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
-    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTree, PlcClientError> {
+    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTree, PlcError> {
         let (symbols, type_map) = ads::symbol::get_symbol_info(self.ads_device())?;
         let mut symbol = None;
 
@@ -221,7 +240,7 @@ impl PlcClient {
         &mut self,
         symbol: &str,
         symbol_type_tree: &SymbolTypeTree,
-    ) -> Result<u32, PlcClientError> {
+    ) -> Result<u32, PlcError> {
         let index_offset = self.symbol_handle(symbol)?.as_u32();
 
         let notif_handle = self.ads_device().add_notification(
