@@ -1,8 +1,10 @@
 mod map;
 mod tree;
+mod r#type;
 mod type_tree;
 
 pub use self::map::*;
+pub use self::r#type::*;
 pub use self::tree::*;
 pub use self::type_tree::*;
 

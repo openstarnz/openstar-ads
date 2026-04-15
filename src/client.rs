@@ -1,22 +1,13 @@
 use ads_client as ads;
-use bon::bon;
-use crossbeam_channel::Receiver;
+use byteorder::LE;
 use std::{collections::HashMap, time::Duration};
 
 pub use ads::AdsTimeout;
 
 use crate::{
-    plc_connection::PlcConnection, PlcDataType, PlcParams, SymbolTypeTree, SymbolTypeTreeError,
+    plc_connection::PlcConnection, PlcDataType, PlcError, PlcParams, SymbolTypeTree,
+    SymbolTypeTreeError,
 };
-
-#[derive(Debug, thiserror::Error)]
-pub enum PlcError {
-    #[error("ADS error {0}")]
-    Ads(#[from] ads::AdsError),
-
-    #[error("Symbol Type Tree error {0}")]
-    SymbolTypeTree(#[from] SymbolTypeTreeError),
-}
 
 #[derive(Debug, Copy, Clone)]
 pub struct SymbolHandle(u32);
@@ -36,70 +27,69 @@ impl NotificationHandle {
     }
 }
 
-pub struct Plc {
-    addr: String,
-    port: u16,
-    timeout: Option<AdsTimeout>,
-    retry_delay: Option<Duration>,
-    set_to_run_mode: bool,
-    connection: PlcConnection,
+pub struct PlcClient {
+    ads_client: ads::Client,
     symbol_handles: HashMap<String, SymbolHandle>,
     notification_handles: Vec<NotificationHandle>,
 }
 
+/// Get u32 handle to the name in the write data. Index offset is 0.
+const GET_SYMHANDLE_BYNAME: u32 = 0xF003;
+const GET_SYMHANDLE_BYNAME_LEN: usize = 4;
+
 /// Provides a more user friendly wrapper to interact with the OpenStar PLC's.
-#[bon]
-impl Plc {
-    #[builder]
-    pub fn new(
-        addr: String,
-        port: u16,
-        timeout: Option<AdsTimeout>,
-        retry_delay: Option<Duration>,
-        set_to_run_mode: bool,
-    ) -> Self {
+impl PlcClient {
+    pub fn new(ads_client: ads::Client) -> Self {
         Self {
-            addr,
-            port,
-            timeout,
-            retry_delay,
-            set_to_run_mode,
-            ads_client: Default::default(),
+            ads_client,
             symbol_handles: Default::default(),
             notification_handles: Default::default(),
         }
     }
 
-    async fn ads_client(&self) -> Result<&ads::Client, PlcError> {
-        let Some(client) = self.ads_client else {
-            let mut builder = ads::ClientBuilder::new(&self.addr, self.port);
-            if let Some(timeout) = self.timeout {
-                builder = builder.set_timeout(timeout);
-            };
-            if let Some(retry_delay) = self.retry_delay {
-                builder = builder.set_retry_delay(Some(retry_delay));
-            };
-            let client = builder.build().await?;
-            self.ads_client = Some(client);
-            return Ok(&client);
-        };
-        Ok(&client)
+    async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle, PlcError> {
+        let mut read_data = [0; GET_SYMHANDLE_BYNAME_LEN];
+        let write_data = symbol.as_bytes();
+
+        self.ads_client
+            .read_write(GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
+            .await?;
+
+        Ok(SymbolHandle(u32::from_le_bytes(read_data)))
     }
 
-    fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle, PlcError> {
-        // TODO: might need to think a bit more about other cases we may need to invalidate these handles e.g: new code flashed onto the PLC
+    async fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle, PlcError> {
+        // TODO: ensure this cache is reset when PLC is reset
         let handle = self.symbol_handles.get(symbol);
         let handle = match handle {
             Some(handle) => handle.to_owned(),
             None => {
-                let handle_raw = ads::Handle::new(self.ads_device(), symbol)?.raw();
-                let handle = SymbolHandle(handle_raw);
+                let handle = self.get_symbol_handle(symbol).await?;
                 self.symbol_handles.insert(symbol.to_owned(), handle);
                 handle
             }
         };
 
         Ok(handle)
+    }
+
+    async fn get_symbol_info(&self, symbol: &str) -> Result<SymbolHandle, PlcError> {
+        let mut read_data = [0; GET_SYMHANDLE_BYNAME_LEN];
+
+        if let Err(err) = self.ads_client.read(0xF00F, 0, &mut read_data).await {
+            println!("Error: {}", err);
+        }
+
+        let n_symbols = LE::read_u32(&read_data[0..]) as usize;
+        let symbol_len = LE::read_u32(&read_data[4..]) as usize;
+        let n_types = LE::read_u32(&read_data[8..]) as usize;
+        let types_len = LE::read_u32(&read_data[12..]) as usize;
+
+        let mut symbol_data: Vec<u8> = Vec::with_capacity(symbol_len);
+        symbol_data.resize(symbol_len, 0);
+
+        let mut types_data: Vec<u8> = Vec::with_capacity(types_len);
+        types_data.resize(types_len, 0);
     }
 
     /// Returns if the connected ADS device is in run mode.

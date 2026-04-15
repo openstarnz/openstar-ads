@@ -1,27 +1,31 @@
-enum PlcConnectionState {
-    Connected(PlcClient),
+use ads_client::AdsTimeout;
+use std::time::Duration;
+
+enum PlcConnection {
+    Connected(ads_client::Client),
     Disconnected,
 }
 
-impl Default for PlcConnectionState {
+impl Default for PlcConnection {
     fn default() -> Self {
         Self::Disconnected
     }
 }
 
-impl PlcConnectionState {
+impl PlcConnection {
     fn connect(
         &mut self,
-        ads_router_address: SocketAddr,
-        plc_ams_address: AmsAddr,
-        local_ams_address: Option<AmsAddr>,
+        addr: String,
+        port: u16,
+        timeout: Option<AdsTimeout>,
+        retry_delay: Option<Duration>,
         set_to_run_mode: bool,
-    ) -> Result<()> {
+    ) -> Result<(), PlcError> {
         match self {
-            PlcConnectionState::Connected(_) => {
+            PlcConnection::Connected(_) => {
                 println!("Attempted to connect to PLC but it is already connected!")
             }
-            PlcConnectionState::Disconnected => {
+            PlcConnection::Disconnected => {
                 let ams_source: ads::Source =
                     local_ams_address.map_or(ads::Source::Request, ads::Source::Addr);
 
@@ -40,7 +44,7 @@ impl PlcConnectionState {
                     return Err(anyhow!("PLC not in run mode, stopping connection."));
                 }
 
-                *self = PlcConnectionState::Connected(plc_client);
+                *self = PlcConnection::Connected(plc_client);
             }
         }
 
@@ -49,14 +53,14 @@ impl PlcConnectionState {
 
     fn disconnect(&mut self) {
         match self {
-            PlcConnectionState::Connected(plc_client) => {
+            PlcConnection::Connected(plc_client) => {
                 plc_client.unsubscribe_all();
 
-                *self = PlcConnectionState::Disconnected;
+                *self = PlcConnection::Disconnected;
 
                 println!("PLC connection was dropped.");
             }
-            PlcConnectionState::Disconnected => {
+            PlcConnection::Disconnected => {
                 // Already disconnected...
             }
         }
@@ -64,15 +68,15 @@ impl PlcConnectionState {
 
     fn client(&self) -> Option<&PlcClient> {
         match self {
-            PlcConnectionState::Connected(plc_client) => Some(plc_client),
-            PlcConnectionState::Disconnected => None,
+            PlcConnection::Connected(plc_client) => Some(plc_client),
+            PlcConnection::Disconnected => None,
         }
     }
 
     fn client_mut(&mut self) -> Option<&mut PlcClient> {
         match self {
-            PlcConnectionState::Connected(plc_client) => Some(plc_client),
-            PlcConnectionState::Disconnected => None,
+            PlcConnection::Connected(plc_client) => Some(plc_client),
+            PlcConnection::Disconnected => None,
         }
     }
 

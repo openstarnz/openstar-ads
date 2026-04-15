@@ -9,11 +9,13 @@ mod data_types;
 /// plc_connection provides an async safe wrapper around the plc_client connection.
 pub mod plc_connection;
 
+pub(crate) mod client;
 pub(crate) mod connection;
-pub(crate) mod index;
+mod error;
 mod params;
 mod symbol;
 
 pub use self::data_types::*;
+pub use self::error::*;
 pub use self::params::*;
 pub use self::symbol::*;
