@@ -1,10 +1,7 @@
-use ads_client as ads;
-use byteorder::LE;
-use std::{collections::HashMap, time::Duration};
+use ads_client::{self as ads};
+use std::{collections::HashMap};
 
-pub use ads::AdsTimeout;
-
-use crate::{PlcConnection, PlcDataType, PlcError, PlcParams, SymbolTypeTree, SymbolTypeTreeError};
+use crate::{ PlcDataType, PlcError, Result, Symbol, TypeMap, get_symbol_info};
 
 #[derive(Debug, Copy, Clone)]
 pub struct SymbolHandle(u32);
@@ -24,7 +21,7 @@ impl NotificationHandle {
     }
 }
 
-pub struct PlcClient {
+pub struct AdsClient {
     ads_client: ads::Client,
     symbol_handles: HashMap<String, SymbolHandle>,
     notification_handles: Vec<NotificationHandle>,
@@ -34,8 +31,12 @@ pub struct PlcClient {
 const GET_SYMHANDLE_BYNAME: u32 = 0xF003;
 const GET_SYMHANDLE_BYNAME_LEN: usize = 4;
 
+/// Read/write data for a symbol by handle.
+/// Use the handle as the index offset.
+const RW_SYMVAL_BYHANDLE: u32 = 0xF005;
+
 /// Provides a more user friendly wrapper to interact with the OpenStar PLC's.
-impl PlcClient {
+impl AdsClient {
     pub fn new(ads_client: ads::Client) -> Self {
         Self {
             ads_client,
@@ -44,22 +45,7 @@ impl PlcClient {
         }
     }
 
-    async fn print_device_info(&self) {
-        let device_info = self.ads_client.read_device_info().await?;
-
-        println!(
-            "DeviceInfo: TwinCAT {}.{}.{} , Device Name: {}",
-            device_info.major, device_info.minor, device_info.build, device_info.device_name
-        );
-    }
-
-    async fn print_state(&self) {
-        let state = self.ads_client.read_state().await?;
-
-        println!("State: {:?}", state);
-    }
-
-    async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle, PlcError> {
+    async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
         let mut read_data = [0; GET_SYMHANDLE_BYNAME_LEN];
         let write_data = symbol.as_bytes();
 
@@ -70,7 +56,7 @@ impl PlcClient {
         Ok(SymbolHandle(u32::from_le_bytes(read_data)))
     }
 
-    async fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle, PlcError> {
+    async fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle> {
         let handle = self.symbol_handles.get(symbol);
         let handle = match handle {
             Some(handle) => handle.to_owned(),
@@ -84,33 +70,19 @@ impl PlcClient {
         Ok(handle)
     }
 
-    async fn get_symbol_info(&self, symbol: &str) -> Result<SymbolHandle, PlcError> {
-        let mut read_data = [0; GET_SYMHANDLE_BYNAME_LEN];
-
-        if let Err(err) = self.ads_client.read(0xF00F, 0, &mut read_data).await {
-            println!("Error: {}", err);
-        }
-
-        let n_symbols = LE::read_u32(&read_data[0..]) as usize;
-        let symbol_len = LE::read_u32(&read_data[4..]) as usize;
-        let n_types = LE::read_u32(&read_data[8..]) as usize;
-        let types_len = LE::read_u32(&read_data[12..]) as usize;
-
-        let mut symbol_data: Vec<u8> = Vec::with_capacity(symbol_len);
-        symbol_data.resize(symbol_len, 0);
-
-        let mut types_data: Vec<u8> = Vec::with_capacity(types_len);
-        types_data.resize(types_len, 0);
+    async fn get_symbol_info(&self) -> Result<(Vec<Symbol>, TypeMap)> {
+        get_symbol_info(&self.ads_client).await
     }
 
     /// Returns if the connected ADS device is in run mode.
-    pub async fn is_run_mode(&self) -> Result<bool, PlcError> {
+    pub async fn is_run_mode(&self) -> Result<bool> {
         let state_info = self.ads_client.read_state().await?;
         Ok(state_info.ads_state == ads::AdsState::Run)
     }
 
     /// Attempts to set the ADS device into run mode if it is not already in it.
-    pub fn set_to_run_mode(&self) -> Result<(), PlcError> {
+    /// TODO
+    pub fn set_to_run_mode(&self) -> Result<()> {
         let device = self.ads_device();
 
         println!("Device Info: {:?}", device.get_info());
@@ -133,31 +105,32 @@ impl PlcClient {
     }
 
     /// Read the value of a symbol with a given type once.
-    pub fn read_symbol<T: PlcDataType>(&self, symbol: &str) -> Result<T, PlcError> {
+    pub async fn read_symbol<T: PlcDataType>(&mut self, symbol: &str) -> Result<T> {
         let mut read_data = T::default();
 
-        let index_offset = self.symbol_handle(symbol)?.as_u32();
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
-        self.ads_device().read_exact(
-            ads::index::RW_SYMVAL_BYHANDLE,
+        read_exact(&self.ads_client, 
+            RW_SYMVAL_BYHANDLE,
             index_offset,
             read_data.as_bytes_mut(),
-        )?;
+        ).await?;
 
         Ok(read_data)
     }
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters.
+    /// TODO
     pub fn invoke_rpc_method<Params: PlcParams>(
         &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<(), PlcError> {
+    ) -> Result<()r> {
         let index_offset = self.symbol_handle(symbol)?.as_u32();
         let write_data = params.as_data();
 
         self.ads_device().write_read_exact(
-            ads::index::RW_SYMVAL_BYHANDLE,
+            RW_SYMVAL_BYHANDLE,
             index_offset,
             &write_data,
             &mut [],
@@ -167,17 +140,18 @@ impl PlcClient {
     }
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') and returns the resulting value.
+    /// TODO
     pub fn fetch_from_rpc_method<Params: PlcParams, Value: PlcDataType>(
         &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<Value, PlcError> {
+    ) -> Result<Valuer> {
         let index_offset = self.symbol_handle(symbol)?.as_u32();
         let write_data = params.as_data();
         let mut read_data = Value::default();
 
         self.ads_device().write_read_exact(
-            ads::index::RW_SYMVAL_BYHANDLE,
+            RW_SYMVAL_BYHANDLE,
             index_offset,
             &write_data,
             read_data.as_bytes_mut(),
@@ -187,15 +161,16 @@ impl PlcClient {
     }
 
     /// Subscribes to a symbol and returns the notification handle.
+    /// TODO
     pub fn subscribe<T: PlcDataType>(
         &mut self,
         name: &str,
-    ) -> Result<NotificationHandle, PlcError> {
+    ) -> Result<NotificationHandler> {
         let notification_handle_raw = {
             let index_offset = self.symbol_handle(name)?.as_u32();
 
             self.ads_device().add_notification(
-                ads::index::RW_SYMVAL_BYHANDLE,
+                RW_SYMVAL_BYHANDLE,
                 index_offset,
                 &ads::notif::Attributes::new(
                     T::size(),
@@ -214,7 +189,8 @@ impl PlcClient {
     }
 
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
-    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTree, PlcError> {
+    /// TODO
+    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTreer> {
         let (symbols, type_map) = ads::symbol::get_symbol_info(self.ads_device())?;
         let mut symbol = None;
 
@@ -240,15 +216,16 @@ impl PlcClient {
     }
 
     /// Subscribes to a symbol based off of its type tree and returns the handle as a u32.
+    /// TODO
     pub fn add_dynamic_symbol_notification(
         &mut self,
         symbol: &str,
         symbol_type_tree: &SymbolTypeTree,
-    ) -> Result<u32, PlcError> {
+    ) -> Result<u32r> {
         let index_offset = self.symbol_handle(symbol)?.as_u32();
 
         let notif_handle = self.ads_device().add_notification(
-            ads::index::RW_SYMVAL_BYHANDLE,
+            RW_SYMVAL_BYHANDLE,
             index_offset,
             &ads::notif::Attributes::new(
                 symbol_type_tree.get_size(),
@@ -262,11 +239,13 @@ impl PlcClient {
     }
 
     /// Get a crossbeam channel receiver for all ADS notifications.
+    /// TODO
     pub fn notification_receiver(&self) -> Receiver<ads::notif::Notification> {
         self.ads_client().get_notification_channel()
     }
 
     /// Deletes an ongoing subscription using its handle.
+    /// TODO
     pub fn unsubscribe(&self, notification_handle: u32) {
         // NB: unsure why, but deleting the notification returns a "Notification handle is invalid" error, hence the ok() here.
         // It still works though, so maybe not a problem.
@@ -274,11 +253,21 @@ impl PlcClient {
     }
 
     /// Deletes all ongoing symbol subscriptions.
+    /// TODO
     pub fn unsubscribe_all(&mut self) {
         for notification_handle in &self.notification_handles {
             self.unsubscribe(*notification_handle);
         }
 
         self.notification_handles.clear();
+    }
+}
+
+pub(crate) async fn read_exact(ads_client: &ads::Client, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<()> {
+    let len = ads_client.read(index_group, index_offset, data).await?;
+    if len != data.len() as u32 {
+        Err(PlcError::Reply("read data", "got less data than expected", len as u32))
+    } else {
+        Ok(())
     }
 }

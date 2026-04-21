@@ -36,11 +36,11 @@ impl PlcConnection {
                 let ads_client = ads_client_builder.build().await?;
                 let client = PlcClient::new(ads_client);
 
-                if !client.is_run_mode()? && set_to_run_mode {
+                if !client.is_run_mode().await? && set_to_run_mode {
                     client.set_to_run_mode()?;
                 }
 
-                if !client.is_run_mode()? {
+                if !client.is_run_mode().await? {
                     return Err(PlcError::Other(
                         "PLC not in run mode, stopping connection.".to_owned(),
                     ));

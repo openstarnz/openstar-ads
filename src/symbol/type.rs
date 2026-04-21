@@ -1,24 +1,23 @@
-// Source: https://github.com/Simworx/ads-rs/blob/db7ff6ae2175298554daf37fc86340af4821583e/src/symbol.rs
+// Source: https://github.com/Simworx/ads-rs/blob/db7ff6ae2175298554daf37fc86340af4821583e/src/symbol.rs#L89-L748
+//
+// Changes:
+// - Added constants for necessary ADS index groups
+// - Updated `get_symbol_info`
+// - Updated `get_type_info_by_name`
 
+use ads_client as ads;
 use byteorder::{ByteOrder, ReadBytesExt, LE};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 
-use crate::{ErrContext, PlcError, Result};
+use crate::{read_exact, ErrContext, PlcError, Result};
 
-const GET_SYMVAL_BYNAME: u32 = 0xF004;
-const GET_SYMINFO_BYNAME: u32 = 0xF007;
-const GET_SYMVERSION: u32 = 0xF008;
-const GET_SYMINFO_BYNAME_EX: u32 = 0xF009;
-const SYM_DOWNLOAD: u32 = 0xF00A;
+// ADS index group constants
 const SYM_UPLOAD: u32 = 0xF00B;
-const SYM_UPLOAD_INFO: u32 = 0xF00C;
-const SYM_DOWNLOAD2: u32 = 0xF00D;
 const SYM_DT_UPLOAD: u32 = 0xF00E;
 const SYM_UPLOAD_INFO2: u32 = 0xF00F;
-const SYM_NOTE: u32 = 0xF010;
-const GET_TYPEINFO_BYNAME_EX: u32 = 0xF011;
+pub const GET_TYPEINFO_BYNAME_EX: u32 = 0xF011;
 
 /// Represents a symbol in the PLC memory.
 pub struct Symbol {
@@ -451,17 +450,20 @@ pub type TypeMap = HashMap<String, Type>;
 ///
 /// Returns the symbol list and a [`TypeMap`] containing the full type
 /// inventory including fields, attributes, enum variants, and RPC methods.
-pub fn get_symbol_info(device: Device<'_>) -> Result<(Vec<Symbol>, TypeMap)> {
-    let mut read_data = [0; 64];
-    device.read_exact(SYM_UPLOAD_INFO2, 0, &mut read_data)?;
+pub async fn get_symbol_info(ads_client: &ads::Client) -> Result<(Vec<Symbol>, TypeMap)> {
+    // AdsSymbolUploadInfo2 is 48 bytes, as per TcAdsDef.h
+    // See also: https://github.com/hANSIc99/ads_client/issues/1#issuecomment-1807817117
+    let mut read_data = [0; 48];
+    read_exact(ads_client, SYM_UPLOAD_INFO2, 0, &mut read_data).await?;
+
     let symbol_len = LE::read_u32(&read_data[4..]) as usize;
     let types_len = LE::read_u32(&read_data[12..]) as usize;
 
     let mut type_data = vec![0; types_len];
-    device.read_exact(SYM_DT_UPLOAD, 0, &mut type_data)?;
+    read_exact(ads_client, SYM_DT_UPLOAD, 0, &mut type_data).await?;
 
     let mut symbol_data = vec![0; symbol_len];
-    device.read_exact(SYM_UPLOAD, 0, &mut symbol_data)?;
+    read_exact(ads_client, SYM_UPLOAD, 0, &mut symbol_data).await?;
 
     decode_symbol_info(symbol_data, type_data)
 }
@@ -622,14 +624,17 @@ pub fn decode_symbol_info(
 ///
 /// Returns a fully parsed [`Type`] including GUID, attributes, enum infos,
 /// and RPC methods when present.
-pub fn get_type_info_by_name(device: Device<'_>, type_name: &str) -> Result<Type> {
+pub async fn get_type_info_by_name(ads_client: &ads::Client, type_name: &str) -> Result<Type> {
     let mut read_data = vec![0u8; 4096];
-    let n = device.write_read(
-        GET_TYPEINFO_BYNAME_EX,
-        0,
-        type_name.as_bytes(),
-        &mut read_data,
-    )?;
+    let n = ads_client
+        .read_write(
+            GET_TYPEINFO_BYNAME_EX,
+            0,
+            &mut read_data,
+            type_name.as_bytes(),
+        )
+        .await?;
+    let n = n as usize;
     let data = &read_data[..n];
     if data.len() < 4 {
         return Err(PlcError::Reply(
