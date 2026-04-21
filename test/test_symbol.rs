@@ -1,3 +1,4 @@
+// Source: https://github.com/Simworx/ads-rs/blob/feature/type_complete/src/test/test_symbol.rs
 use crate::symbol::decode_symbol_info;
 
 // Struct used to avoid clippy::too_many_arguments on build_type_entry.
