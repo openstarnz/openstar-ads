@@ -1,7 +1,7 @@
-use ads_client::{self as ads};
-use std::{collections::HashMap};
+use ads_client::{self as ads, AdsNotificationAttrib, StateInfo};
+use std::{collections::HashMap, fs::read};
 
-use crate::{ PlcDataType, PlcError, Result, Symbol, TypeMap, get_symbol_info};
+use crate::{get_symbol_info, PlcDataType, PlcError, PlcParams, Result, Symbol, TypeMap};
 
 #[derive(Debug, Copy, Clone)]
 pub struct SymbolHandle(u32);
@@ -81,25 +81,28 @@ impl AdsClient {
     }
 
     /// Attempts to set the ADS device into run mode if it is not already in it.
-    /// TODO
-    pub fn set_to_run_mode(&self) -> Result<()> {
-        let device = self.ads_device();
+    pub async fn set_to_run_mode(&self) -> Result<()> {
+        let device_info = self.ads_client.read_device_info().await?;
+        println!("Device Info: {:?}", device_info);
 
-        println!("Device Info: {:?}", device.get_info());
+        let state_info = self.ads_client.read_state().await?;
+        println!("Device State: {:?}", state_info);
 
-        let (state, dev_state) = device.get_state()?;
-
-        println!("Device State: {:?}", (state, dev_state));
-
-        if state != ads::AdsState::Run {
+        if state_info.ads_state != ads::AdsState::Run {
             println!("Attempting to set PLC to run mode...");
 
-            device.write_control(ads::AdsState::Run, dev_state)?;
+            let next_state_info = StateInfo {
+                ads_state: ads::AdsState::Run,
+                device_state: state_info.device_state,
+            };
+            self.ads_client
+                .write_control(&next_state_info, None)
+                .await?;
 
-            println!("Device State: {:?}", device.get_state());
+            let state_info = self.ads_client.read_state().await?;
+            println!("Device State: {:?}", state_info);
+            assert_eq!(state_info.ads_state, ads::AdsState::Run);
         }
-
-        assert!(device.get_state()?.0 == ads::AdsState::Run);
 
         Ok(())
     }
@@ -110,64 +113,83 @@ impl AdsClient {
 
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
-        read_exact(&self.ads_client, 
+        read_exact(
+            &self.ads_client,
             RW_SYMVAL_BYHANDLE,
             index_offset,
             read_data.as_bytes_mut(),
-        ).await?;
+        )
+        .await?;
 
         Ok(read_data)
     }
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters.
-    /// TODO
-    pub fn invoke_rpc_method<Params: PlcParams>(
+    pub async fn invoke_rpc_method<Params: PlcParams>(
         &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<()r> {
-        let index_offset = self.symbol_handle(symbol)?.as_u32();
+    ) -> Result<()> {
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
         let write_data = params.as_data();
 
-        self.ads_device().write_read_exact(
+        read_write_exact(
+            &self.ads_client,
             RW_SYMVAL_BYHANDLE,
             index_offset,
-            &write_data,
             &mut [],
-        )?;
+            &write_data,
+        )
+        .await?;
 
         Ok(())
     }
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') and returns the resulting value.
-    /// TODO
-    pub fn fetch_from_rpc_method<Params: PlcParams, Value: PlcDataType>(
+    pub async fn fetch_from_rpc_method<Params: PlcParams, Value: PlcDataType>(
         &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<Valuer> {
-        let index_offset = self.symbol_handle(symbol)?.as_u32();
-        let write_data = params.as_data();
+    ) -> Result<Value> {
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
         let mut read_data = Value::default();
+        let write_data = params.as_data();
 
-        self.ads_device().write_read_exact(
+        read_write_exact(
+            &self.ads_client,
             RW_SYMVAL_BYHANDLE,
             index_offset,
-            &write_data,
             read_data.as_bytes_mut(),
-        )?;
+            &write_data,
+        )
+        .await?;
 
         Ok(read_data)
     }
 
     /// Subscribes to a symbol and returns the notification handle.
     /// TODO
-    pub fn subscribe<T: PlcDataType>(
-        &mut self,
-        name: &str,
-    ) -> Result<NotificationHandler> {
+    pub async fn subscribe<T: PlcDataType>(&mut self, symbol: &str) -> Result<NotificationHandle> {
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+
+        let attributes = AdsNotificationAttrib {
+            cb_length: T::size() as u32,
+            trans_mode: ads::AdsTransMode::OnChange,
+            // max_delay in units of 100ns
+            max_delay: 0,
+            // cycle_time in units of 100ns
+            // TODO: setting this to higher e.g: 1000ms does not work, maybe because the status data is changing every PLC cycle?
+            // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
+            cycle_time: 100_000, // (100,000 * 100ns) = 10,000,000 ns = 10 ms
+        };
+        let handle: u32 = 0;
+
+        
+
+        self.ads_client.add_device_notification(RW_SYMVAL_BYHANDLE, index_offset, attributes, handle, callback, user_data)
+
         let notification_handle_raw = {
-            let index_offset = self.symbol_handle(name)?.as_u32();
+            let index_offset = self.symbol_handle(name).await?.as_u32();
 
             self.ads_device().add_notification(
                 RW_SYMVAL_BYHANDLE,
@@ -176,8 +198,6 @@ impl AdsClient {
                     T::size(),
                     ads::notif::TransmissionMode::ServerOnChange,
                     std::time::Duration::ZERO,
-                    // TODO: setting this to higher e.g: 1000ms does not work, maybe because the status data is changing every PLC cycle?
-                    // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
                     std::time::Duration::from_millis(10),
                 ),
             )?
@@ -190,7 +210,7 @@ impl AdsClient {
 
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
     /// TODO
-    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTreer> {
+    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTree> {
         let (symbols, type_map) = ads::symbol::get_symbol_info(self.ads_device())?;
         let mut symbol = None;
 
@@ -221,7 +241,7 @@ impl AdsClient {
         &mut self,
         symbol: &str,
         symbol_type_tree: &SymbolTypeTree,
-    ) -> Result<u32r> {
+    ) -> Result<u32> {
         let index_offset = self.symbol_handle(symbol)?.as_u32();
 
         let notif_handle = self.ads_device().add_notification(
@@ -263,10 +283,40 @@ impl AdsClient {
     }
 }
 
-pub(crate) async fn read_exact(ads_client: &ads::Client, index_group: u32, index_offset: u32, data: &mut [u8]) -> Result<()> {
+pub(crate) async fn read_exact(
+    ads_client: &ads::Client,
+    index_group: u32,
+    index_offset: u32,
+    data: &mut [u8],
+) -> Result<()> {
     let len = ads_client.read(index_group, index_offset, data).await?;
     if len != data.len() as u32 {
-        Err(PlcError::Reply("read data", "got less data than expected", len as u32))
+        Err(PlcError::Reply(
+            "read data",
+            "got less data than expected",
+            len as u32,
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) async fn read_write_exact(
+    ads_client: &ads::Client,
+    index_group: u32,
+    index_offset: u32,
+    read_data: &mut [u8],
+    write_data: &[u8],
+) -> Result<()> {
+    let len = ads_client
+        .read_write(index_group, index_offset, read_data, write_data)
+        .await?;
+    if len != read_data.len() as u32 {
+        Err(PlcError::Reply(
+            "read/write data",
+            "got less data than expected",
+            len as u32,
+        ))
     } else {
         Ok(())
     }
