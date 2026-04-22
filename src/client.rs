@@ -1,5 +1,6 @@
 use ads_client::{self as ads, AdsNotificationAttrib, StateInfo};
 use std::{collections::HashMap, fs::read};
+use tokio::sync::watch;
 
 use crate::{get_symbol_info, PlcDataType, PlcError, PlcParams, Result, Symbol, TypeMap};
 
@@ -12,19 +13,15 @@ impl SymbolHandle {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct NotificationHandle(u32);
-
-impl NotificationHandle {
-    pub fn as_u32(&self) -> u32 {
-        self.0
-    }
+#[derive(Debug)]
+pub struct NotificationSubscription<T> {
+    receiver: watch::Receiver<T>,
+    handle: u32,
 }
 
 pub struct AdsClient {
     ads_client: ads::Client,
     symbol_handles: HashMap<String, SymbolHandle>,
-    notification_handles: Vec<NotificationHandle>,
 }
 
 /// Get u32 handle to the name in the write data. Index offset is 0.
@@ -41,7 +38,6 @@ impl AdsClient {
         Self {
             ads_client,
             symbol_handles: Default::default(),
-            notification_handles: Default::default(),
         }
     }
 
@@ -169,7 +165,10 @@ impl AdsClient {
 
     /// Subscribes to a symbol and returns the notification handle.
     /// TODO
-    pub async fn subscribe<T: PlcDataType>(&mut self, symbol: &str) -> Result<NotificationHandle> {
+    pub async fn subscribe<T: PlcDataType>(
+        &mut self,
+        symbol: &str,
+    ) -> Result<NotificationSubscription<T>> {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
         let attributes = AdsNotificationAttrib {
@@ -184,29 +183,49 @@ impl AdsClient {
         };
         let handle: u32 = 0;
 
-        
+        let (notification_tx, notification_rx) = watch::channel(T::default());
+        let callback = |handle, timestamp, payload| {
+            // TODO(mw): Do we need to handle this failure better?
+            let data = T::from_bytes(payload)
+                .expect("Failed to parse PlcDataType from notification bytes");
+            notification_tx.send(data);
+        };
 
-        self.ads_client.add_device_notification(RW_SYMVAL_BYHANDLE, index_offset, attributes, handle, callback, user_data)
-
-        let notification_handle_raw = {
-            let index_offset = self.symbol_handle(name).await?.as_u32();
-
-            self.ads_device().add_notification(
+        self.ads_client
+            .add_device_notification(
                 RW_SYMVAL_BYHANDLE,
                 index_offset,
-                &ads::notif::Attributes::new(
-                    T::size(),
-                    ads::notif::TransmissionMode::ServerOnChange,
-                    std::time::Duration::ZERO,
-                    std::time::Duration::from_millis(10),
-                ),
-            )?
-        };
-        let notification_handle = NotificationHandle(notification_handle_raw);
-        self.notification_handles.push(notification_handle);
+                &attributes,
+                &mut handle,
+                callback,
+            )
+            .await?;
 
-        Ok(notification_handle)
+        let subscription = NotificationSubscription {
+            receiver: notification_rx,
+            handle,
+        };
+
+        Ok(subscription)
     }
+
+    pub async fn unsubscribe<T>(&self, subscription: NotificationSubcription<T>) -> Result<()> {
+        self.ads_client
+            .delete_device_notification(subscription.handle)
+            .await
+            .map_err(Into::into)
+    }
+
+    /*
+
+            /// Deletes an ongoing subscription using its handle.
+    /// TODO
+    pub fn unsubscribe(&self, notification_handle: u32) {
+        // NB: unsure why, but deleting the notification returns a "Notification handle is invalid" error, hence the ok() here.
+        // It still works though, so maybe not a problem.
+        self.device().delete_notification(notification_handle).ok();
+    }
+     */
 
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
     /// TODO
@@ -262,14 +281,6 @@ impl AdsClient {
     /// TODO
     pub fn notification_receiver(&self) -> Receiver<ads::notif::Notification> {
         self.ads_client().get_notification_channel()
-    }
-
-    /// Deletes an ongoing subscription using its handle.
-    /// TODO
-    pub fn unsubscribe(&self, notification_handle: u32) {
-        // NB: unsure why, but deleting the notification returns a "Notification handle is invalid" error, hence the ok() here.
-        // It still works though, so maybe not a problem.
-        self.device().delete_notification(notification_handle).ok();
     }
 
     /// Deletes all ongoing symbol subscriptions.
