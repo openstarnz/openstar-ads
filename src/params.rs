@@ -1,16 +1,16 @@
-use crate::data_types::PlcDataType;
+use crate::data_types::AdsData;
 
-pub trait PlcParams {
+pub trait AdsParams {
     fn as_data(self) -> Vec<u8>;
 }
 
-impl<P1: PlcDataType> PlcParams for P1 {
+impl<P1: AdsData> AdsParams for P1 {
     fn as_data(self) -> Vec<u8> {
         self.as_bytes().to_owned()
     }
 }
 
-impl<P1: PlcDataType, P2: PlcDataType> PlcParams for (P1, P2) {
+impl<P1: AdsData, P2: AdsData> AdsParams for (P1, P2) {
     fn as_data(self) -> Vec<u8> {
         let data_1 = self.0.as_bytes();
         let data_2 = self.1.as_bytes();
@@ -18,7 +18,7 @@ impl<P1: PlcDataType, P2: PlcDataType> PlcParams for (P1, P2) {
     }
 }
 
-impl<P1: PlcDataType, P2: PlcDataType, P3: PlcDataType> PlcParams for (P1, P2, P3) {
+impl<P1: AdsData, P2: AdsData, P3: AdsData> AdsParams for (P1, P2, P3) {
     fn as_data(self) -> Vec<u8> {
         let data_1 = self.0.as_bytes();
         let data_2 = self.1.as_bytes();
@@ -27,9 +27,7 @@ impl<P1: PlcDataType, P2: PlcDataType, P3: PlcDataType> PlcParams for (P1, P2, P
     }
 }
 
-impl<P1: PlcDataType, P2: PlcDataType, P3: PlcDataType, P4: PlcDataType> PlcParams
-    for (P1, P2, P3, P4)
-{
+impl<P1: AdsData, P2: AdsData, P3: AdsData, P4: AdsData> AdsParams for (P1, P2, P3, P4) {
     fn as_data(self) -> Vec<u8> {
         let data_1 = self.0.as_bytes();
         let data_2 = self.1.as_bytes();
@@ -39,7 +37,7 @@ impl<P1: PlcDataType, P2: PlcDataType, P3: PlcDataType, P4: PlcDataType> PlcPara
     }
 }
 
-impl<P1: PlcDataType, P2: PlcDataType, P3: PlcDataType, P4: PlcDataType, P5: PlcDataType> PlcParams
+impl<P1: AdsData, P2: AdsData, P3: AdsData, P4: AdsData, P5: AdsData> AdsParams
     for (P1, P2, P3, P4, P5)
 {
     fn as_data(self) -> Vec<u8> {

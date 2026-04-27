@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 
-use crate::{read_exact, ErrContext, PlcError, Result};
+use crate::{read_exact, ErrContext, AdsError, Result};
 
 // ADS index group constants
 const SYM_UPLOAD: u32 = 0xF00B;
@@ -334,7 +334,7 @@ fn parse_rpc_method(mut ptr: &[u8]) -> Result<RpcMethod> {
     for _ in 0..param_count {
         let entry_len = ptr.read_u32::<LE>().ctx(ctx)? as usize;
         if entry_len < 4 {
-            return Err(PlcError::Reply(
+            return Err(AdsError::Reply(
                 ctx,
                 "invalid parameter entry length",
                 entry_len as u32,
@@ -489,7 +489,7 @@ pub fn decode_symbol_info(
         let mut buf = [0; 1024];
         let version = ptr.read_u32::<LE>().ctx(ctx)?;
         if version != 1 {
-            return Err(PlcError::Reply(ctx, "unknown type info version", version));
+            return Err(AdsError::Reply(ctx, "unknown type info version", version));
         }
         let _subitem_index = ptr.read_u16::<LE>().ctx(ctx)?;
         let _plc_interface_id = ptr.read_u16::<LE>().ctx(ctx)?;
@@ -637,7 +637,7 @@ pub async fn get_type_info_by_name(ads_client: &ads::Client, type_name: &str) ->
     let n = n as usize;
     let data = &read_data[..n];
     if data.len() < 4 {
-        return Err(PlcError::Reply(
+        return Err(AdsError::Reply(
             "get type info by name",
             "response too short",
             data.len() as u32,

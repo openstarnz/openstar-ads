@@ -1,19 +1,19 @@
-use crate::data_types::PlcDataType;
+use crate::data_types::AdsData;
 
 #[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
 #[repr(C)]
-pub struct PlcInt(i16);
+pub struct AdsInt(i16);
 
-impl PlcDataType for PlcInt {}
+impl AdsData for AdsInt {}
 
-impl From<i16> for PlcInt {
+impl From<i16> for AdsInt {
     fn from(value: i16) -> Self {
         Self(value)
     }
 }
 
-impl From<PlcInt> for i16 {
-    fn from(value: PlcInt) -> Self {
+impl From<AdsInt> for i16 {
+    fn from(value: AdsInt) -> Self {
         value.0
     }
 }

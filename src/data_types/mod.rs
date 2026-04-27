@@ -14,7 +14,7 @@ use std::fmt::Debug;
 
 use bytes::Bytes;
 
-pub trait PlcDataType:
+pub trait AdsData:
     Clone + Debug + Default + zerocopy::AsBytes + zerocopy::FromBytes + zerocopy::FromZeroes
 {
     fn size() -> usize {

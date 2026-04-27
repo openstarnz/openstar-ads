@@ -1,25 +1,25 @@
-use crate::data_types::PlcDataType;
+use crate::data_types::AdsData;
 
 #[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
 #[repr(C)]
-pub struct PlcUDInt(u32);
+pub struct AdsUdint(u32);
 
-impl PlcDataType for PlcUDInt {}
+impl AdsData for AdsUdint {}
 
-impl From<[u16; 2]> for PlcUDInt {
+impl From<[u16; 2]> for AdsUdint {
     fn from(value: [u16; 2]) -> Self {
         Self(bytemuck::cast(value))
     }
 }
 
-impl From<u32> for PlcUDInt {
+impl From<u32> for AdsUdint {
     fn from(value: u32) -> Self {
         Self(value)
     }
 }
 
-impl From<PlcUDInt> for u32 {
-    fn from(value: PlcUDInt) -> Self {
+impl From<AdsUdint> for u32 {
+    fn from(value: AdsUdint) -> Self {
         value.0
     }
 }

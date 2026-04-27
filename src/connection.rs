@@ -1,20 +1,20 @@
 use ads_client as ads;
 use std::time::Duration;
 
-use crate::{PlcClient, PlcError, Result};
+use crate::{AdsClient, AdsError, Result};
 
-pub enum PlcConnection {
-    Connected(PlcClient),
+pub enum AdsConnection {
+    Connected(AdsClient),
     Disconnected,
 }
 
-impl Default for PlcConnection {
+impl Default for AdsConnection {
     fn default() -> Self {
         Self::Disconnected
     }
 }
 
-impl PlcConnection {
+impl AdsConnection {
     pub async fn connect(
         &mut self,
         addr: &str,
@@ -24,29 +24,29 @@ impl PlcConnection {
         set_to_run_mode: bool,
     ) -> Result<()> {
         match self {
-            PlcConnection::Connected(_) => {
+            AdsConnection::Connected(_) => {
                 println!("Attempted to connect to PLC but it is already connected!")
             }
-            PlcConnection::Disconnected => {
+            AdsConnection::Disconnected => {
                 let mut ads_client_builder =
                     ads::ClientBuilder::new(addr, port).set_retry_delay(retry_delay);
                 if let Some(timeout) = timeout {
                     ads_client_builder = ads_client_builder.set_timeout(timeout);
                 }
                 let ads_client = ads_client_builder.build().await?;
-                let client = PlcClient::new(ads_client);
+                let client = AdsClient::new(ads_client);
 
                 if !client.is_run_mode().await? && set_to_run_mode {
                     client.set_to_run_mode()?;
                 }
 
                 if !client.is_run_mode().await? {
-                    return Err(PlcError::Other(
+                    return Err(AdsError::Other(
                         "PLC not in run mode, stopping connection.".to_owned(),
                     ));
                 }
 
-                *self = PlcConnection::Connected(client);
+                *self = AdsConnection::Connected(client);
             }
         }
 
@@ -55,43 +55,43 @@ impl PlcConnection {
 
     pub fn disconnect(&mut self) {
         match self {
-            PlcConnection::Connected(plc_client) => {
+            AdsConnection::Connected(plc_client) => {
                 plc_client.unsubscribe_all();
 
-                *self = PlcConnection::Disconnected;
+                *self = AdsConnection::Disconnected;
 
                 println!("PLC connection was dropped.");
             }
-            PlcConnection::Disconnected => {
+            AdsConnection::Disconnected => {
                 // Already disconnected...
             }
         }
     }
 
-    pub fn client(&self) -> Option<&PlcClient> {
+    pub fn client(&self) -> Option<&AdsClient> {
         match self {
-            PlcConnection::Connected(plc_client) => Some(plc_client),
-            PlcConnection::Disconnected => None,
+            AdsConnection::Connected(plc_client) => Some(plc_client),
+            AdsConnection::Disconnected => None,
         }
     }
 
-    pub fn client_mut(&mut self) -> Option<&mut PlcClient> {
+    pub fn client_mut(&mut self) -> Option<&mut AdsClient> {
         match self {
-            PlcConnection::Connected(plc_client) => Some(plc_client),
-            PlcConnection::Disconnected => None,
+            AdsConnection::Connected(plc_client) => Some(plc_client),
+            AdsConnection::Disconnected => None,
         }
     }
 
-    pub fn handle_disconnect_error(&mut self, error: &PlcError) {
+    pub fn handle_disconnect_error(&mut self, error: &AdsError) {
         // TODO(mw): We should have a think about this.
         let should_disconnect = matches!(
             error,
-            PlcError::Io(_, _)
-                | PlcError::Ads(ads::AdsError {
+            AdsError::Io(_, _)
+                | AdsError::Ads(ads::AdsError {
                     n_error: 0x006,
                     s_msg: _
                 })
-                | PlcError::Reply(_, "unexpected invoke ID", _) // TODO(mw): This is a hangover from the ads library, we should probably remove.
+                | AdsError::Reply(_, "unexpected invoke ID", _) // TODO(mw): This is a hangover from the ads library, we should probably remove.
         );
 
         if should_disconnect {

@@ -4,7 +4,7 @@ use crossbeam_channel::Receiver;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
-use crate::{PlcConnection, PlcDataType, PlcError, PlcParams, SymbolTypeTree, SymbolTypeTreeError};
+use crate::{AdsConnection, AdsData, AdsError, AdsParams, SymbolTypeTree, SymbolTypeTreeError};
 
 pub struct Plc {
     addr: String,
@@ -12,7 +12,7 @@ pub struct Plc {
     timeout: Option<Timeout>,
     retry_delay: Option<Duration>,
     set_to_run_mode: bool,
-    connection: Arc<Mutex<PlcConnection>>,
+    connection: Arc<Mutex<AdsConnection>>,
 }
 
 // Note(mw): We need our own Timeout enum, only because
@@ -89,8 +89,8 @@ impl Plc {
     pub fn is_connected(&self) -> bool {
         let connection = self.connection.lock().await;
         match *connection {
-            PlcConnection::Connected(_) => true,
-            PlcConnection::Disconnected => false,
+            AdsConnection::Connected(_) => true,
+            AdsConnection::Disconnected => false,
         }
     }
 
@@ -109,7 +109,7 @@ impl Plc {
                 );
 
                 match &error {
-                    PlcError::SymbolTypeTree(_symbol_type_tree_error) => connection.disconnect(),
+                    AdsError::SymbolTypeTree(_symbol_type_tree_error) => connection.disconnect(),
                     error => connection.handle_disconnect_error(error),
                 };
 
@@ -266,7 +266,7 @@ impl Plc {
     /// Read a symbol from the PLC.
     ///
     /// Returns None if the PLC is not connected.
-    pub async fn read_symbol<T: PlcDataType>(&self, name: &str) -> Result<Option<T>> {
+    pub async fn read_symbol<T: AdsData>(&self, name: &str) -> Result<Option<T>> {
         let mut connection = self.connection.lock().await;
 
         if let Some(client) = connection.client_mut() {
@@ -287,7 +287,7 @@ impl Plc {
     /// Calls an RPC method on the PLC that returns a value.
     ///
     /// Returns None if the PLC is not connected.
-    pub async fn fetch_from_rpc_method<T: PlcDataType>(&self, name: &str) -> Result<Option<T>> {
+    pub async fn fetch_from_rpc_method<T: AdsData>(&self, name: &str) -> Result<Option<T>> {
         let mut connection = self.connection.lock().await;
 
         if let Some(client) = connection.client_mut() {
@@ -335,7 +335,7 @@ impl Plc {
     /// Calls an RPC method on the PLC with one parameter.
     ///
     /// Returns None if the PLC is not connected.
-    pub fn invoke_rpc_method_with_param<P: PlcDataType>(
+    pub fn invoke_rpc_method_with_param<P: AdsData>(
         &self,
         name: &str,
         param: P,
@@ -365,11 +365,7 @@ impl Plc {
     /// Calls an RPC method on the PLC with three parameters.
     ///
     /// Returns None if the PLC is not connected.
-    pub fn invoke_rpc_method_with_three_params<
-        P1: PlcDataType,
-        P2: PlcDataType,
-        P3: PlcDataType,
-    >(
+    pub fn invoke_rpc_method_with_three_params<P1: AdsData, P2: AdsData, P3: AdsData>(
         &self,
         name: &str,
         param_1: P1,
@@ -401,7 +397,7 @@ impl Plc {
     /// Subscribes to a notification channel on the PLC, returning a handle to the channel.
     ///
     /// Returns None if the PLC is not connected.
-    pub fn subscribe<T: PlcDataType>(&self, name: &str) -> Result<Option<u32>> {
+    pub fn subscribe<T: AdsData>(&self, name: &str) -> Result<Option<u32>> {
         let mut connection = self.connection.lock().await;
 
         if let Some(client) = connection.client_mut() {

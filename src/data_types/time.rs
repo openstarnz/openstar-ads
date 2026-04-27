@@ -1,21 +1,21 @@
-use crate::data_types::PlcDataType;
+use crate::data_types::AdsData;
 
-use super::udint::PlcUDInt;
+use super::udint::AdsUdint;
 
 #[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
 #[repr(C)]
-pub struct PlcTime(PlcUDInt);
+pub struct AdsTime(AdsUdint);
 
-impl PlcDataType for PlcTime {}
+impl AdsData for AdsTime {}
 
-impl From<u32> for PlcTime {
+impl From<u32> for AdsTime {
     fn from(value: u32) -> Self {
-        Self(PlcUDInt::from(value))
+        Self(AdsUdint::from(value))
     }
 }
 
-impl From<PlcTime> for u32 {
-    fn from(value: PlcTime) -> Self {
+impl From<AdsTime> for u32 {
+    fn from(value: AdsTime) -> Self {
         value.0.into()
     }
 }

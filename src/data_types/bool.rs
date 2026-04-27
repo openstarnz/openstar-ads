@@ -1,12 +1,12 @@
-use crate::data_types::PlcDataType;
+use crate::data_types::AdsData;
 
 #[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
 #[repr(C)]
-pub struct PlcBool(u8);
+pub struct AdsBool(u8);
 
-impl PlcDataType for PlcBool {}
+impl AdsData for AdsBool {}
 
-impl From<bool> for PlcBool {
+impl From<bool> for AdsBool {
     fn from(value: bool) -> Self {
         if value {
             Self(1)
@@ -16,8 +16,8 @@ impl From<bool> for PlcBool {
     }
 }
 
-impl From<PlcBool> for bool {
-    fn from(value: PlcBool) -> Self {
+impl From<AdsBool> for bool {
+    fn from(value: AdsBool) -> Self {
         if value.0 == 1 {
             true
         } else if value.0 == 0 {

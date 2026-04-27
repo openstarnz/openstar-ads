@@ -2,7 +2,7 @@ use ads_client::{self as ads, AdsNotificationAttrib, StateInfo};
 use std::{collections::HashMap, fs::read};
 use tokio::sync::watch;
 
-use crate::{get_symbol_info, PlcDataType, PlcError, PlcParams, Result, Symbol, TypeMap};
+use crate::{get_symbol_info, AdsData, AdsError, AdsParams, Result, Symbol, TypeMap};
 
 #[derive(Debug, Copy, Clone)]
 pub struct SymbolHandle(u32);
@@ -104,7 +104,7 @@ impl AdsClient {
     }
 
     /// Read the value of a symbol with a given type once.
-    pub async fn read_symbol<T: PlcDataType>(&mut self, symbol: &str) -> Result<T> {
+    pub async fn read_symbol<T: AdsData>(&mut self, symbol: &str) -> Result<T> {
         let mut read_data = T::default();
 
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
@@ -121,7 +121,7 @@ impl AdsClient {
     }
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters.
-    pub async fn invoke_rpc_method<Params: PlcParams>(
+    pub async fn invoke_rpc_method<Params: AdsParams>(
         &mut self,
         symbol: &str,
         params: Params,
@@ -142,7 +142,7 @@ impl AdsClient {
     }
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') and returns the resulting value.
-    pub async fn fetch_from_rpc_method<Params: PlcParams, Value: PlcDataType>(
+    pub async fn fetch_from_rpc_method<Params: AdsParams, Value: AdsData>(
         &mut self,
         symbol: &str,
         params: Params,
@@ -165,7 +165,7 @@ impl AdsClient {
 
     /// Subscribes to a symbol and returns the notification handle.
     /// TODO
-    pub async fn subscribe<T: PlcDataType>(
+    pub async fn subscribe<T: AdsData>(
         &mut self,
         symbol: &str,
     ) -> Result<NotificationSubscription<T>> {
@@ -302,7 +302,7 @@ pub(crate) async fn read_exact(
 ) -> Result<()> {
     let len = ads_client.read(index_group, index_offset, data).await?;
     if len != data.len() as u32 {
-        Err(PlcError::Reply(
+        Err(AdsError::Reply(
             "read data",
             "got less data than expected",
             len as u32,
@@ -323,7 +323,7 @@ pub(crate) async fn read_write_exact(
         .read_write(index_group, index_offset, read_data, write_data)
         .await?;
     if len != read_data.len() as u32 {
-        Err(PlcError::Reply(
+        Err(AdsError::Reply(
             "read/write data",
             "got less data than expected",
             len as u32,

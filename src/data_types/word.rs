@@ -1,13 +1,13 @@
-use crate::data_types::PlcDataType;
+use crate::data_types::AdsData;
 
 #[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
 #[repr(C)]
-pub struct PlcWord(u16);
+pub struct AdsWord(u16);
 
-impl PlcDataType for PlcWord {}
+impl AdsData for AdsWord {}
 
-impl From<PlcWord> for u16 {
-    fn from(value: PlcWord) -> Self {
+impl From<AdsWord> for u16 {
+    fn from(value: AdsWord) -> Self {
         value.0
     }
 }

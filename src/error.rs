@@ -3,7 +3,7 @@ use ads_client as ads;
 use crate::SymbolTypeTreeError;
 
 #[derive(Debug, thiserror::Error)]
-pub enum PlcError {
+pub enum AdsError {
     #[error("ADS error {0}")]
     Ads(#[from] ads::AdsError),
 
@@ -22,7 +22,7 @@ pub enum PlcError {
     Other(String),
 }
 
-pub type Result<T> = std::result::Result<T, PlcError>;
+pub type Result<T> = std::result::Result<T, AdsError>;
 
 pub(crate) trait ErrContext {
     type Success;
@@ -32,6 +32,6 @@ pub(crate) trait ErrContext {
 impl<T> ErrContext for std::result::Result<T, std::io::Error> {
     type Success = T;
     fn ctx(self, context: &'static str) -> Result<Self::Success> {
-        self.map_err(|e| PlcError::Io(context, e))
+        self.map_err(|e| AdsError::Io(context, e))
     }
 }
