@@ -1,4 +1,5 @@
 use ads_client::{self as ads, AdsNotificationAttrib, StateInfo};
+use bytes::Bytes;
 use std::{
     collections::HashMap,
     sync::{
@@ -9,7 +10,8 @@ use std::{
 use tokio::sync::mpsc;
 
 use crate::{
-    get_symbol_info, AdsData, AdsError, AdsParams, Result, Symbol, SymbolTypeTree, TypeMap,
+    get_symbol_info, AdsData, AdsError, AdsParams, Result, Symbol, SymbolMap, SymbolMapExt,
+    SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree, TypeMap,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -236,15 +238,52 @@ impl AdsClient {
         Ok(read_data)
     }
 
-    /// Subscribes to a symbol and returns the notification handle.
+    /// Subscribes to a symbol.
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
         &mut self,
         symbol: &str,
     ) -> Result<NotificationSubscription<T>> {
+        let size = T::size() as u32;
+        let from_bytes = |payload| {
+            // TODO(mw): Do we need to handle this failure better?
+            T::from_bytes(payload).expect("Failed to parse PlcDataType from notification bytes")
+        };
+        self.subscribe_inner(symbol, size, from_bytes).await
+    }
+
+    /// Subscribes to a symbol tree using the symbol type tree.
+    pub async fn subscribe_tree(
+        &mut self,
+        symbol: &str,
+        symbol_type_tree: SymbolTypeTree,
+    ) -> Result<NotificationSubscription<SymbolTree>> {
+        let size = symbol_type_tree.get_size() as u32;
+        let from_bytes = move |payload| SymbolTree::from_bytes(payload, &symbol_type_tree, 0);
+        self.subscribe_inner(symbol, size, from_bytes).await
+    }
+
+    /// Subscribes to a symbol map using the symbol type tree.
+    pub async fn subscribe_map(
+        &mut self,
+        symbol: &str,
+        symbol_type_tree: SymbolTypeTree,
+    ) -> Result<NotificationSubscription<SymbolMap>> {
+        let size = symbol_type_tree.get_size() as u32;
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, String::new());
+        let from_bytes = move |payload| SymbolMap::from_bytes(payload, &symbol_type_map);
+        self.subscribe_inner(symbol, size, from_bytes).await
+    }
+
+    async fn subscribe_inner<T: Send + Sync + 'static>(
+        &mut self,
+        symbol: &str,
+        size: u32,
+        from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
+    ) -> Result<NotificationSubscription<T>> {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
         let attributes = AdsNotificationAttrib {
-            cb_length: T::size() as u32,
+            cb_length: size,
             trans_mode: ads::AdsTransMode::OnChange,
             // max_delay in units of 100ns
             max_delay: 0,
@@ -257,9 +296,7 @@ impl AdsClient {
 
         let (notification_tx, notification_rx) = mpsc::unbounded_channel();
         let callback = move |_handle, _timestamp, payload| {
-            // TODO(mw): Do we need to handle this failure better?
-            let data = T::from_bytes(payload)
-                .expect("Failed to parse PlcDataType from notification bytes");
+            let data = from_bytes(payload);
             notification_tx.send(data);
         };
 
