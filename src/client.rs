@@ -1,8 +1,17 @@
 use ads_client::{self as ads, AdsNotificationAttrib, StateInfo};
-use std::{collections::HashMap, fs::read};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+use thiserror::Error;
 use tokio::sync::watch;
 
-use crate::{get_symbol_info, AdsData, AdsError, AdsParams, Result, Symbol, TypeMap};
+use crate::{
+    get_symbol_info, AdsData, AdsError, AdsParams, Result, Symbol, SymbolTypeTree, TypeMap,
+};
 
 #[derive(Debug, Copy, Clone)]
 pub struct SymbolHandle(u32);
@@ -13,15 +22,71 @@ impl SymbolHandle {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct NotificationHandle {
+    is_cancelled: Arc<AtomicBool>,
+    ads_handle: u32,
+}
+
+impl NotificationHandle {
+    fn new(ads_handle: u32) -> Self {
+        Self {
+            is_cancelled: Arc::new(AtomicBool::new(false)),
+            ads_handle,
+        }
+    }
+
+    fn cancel(&self) {
+        self.is_cancelled.store(true, Ordering::Relaxed);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.is_cancelled.load(Ordering::Relaxed)
+    }
+}
+
 #[derive(Debug)]
 pub struct NotificationSubscription<T> {
-    receiver: watch::Receiver<T>,
-    handle: u32,
+    receiver: watch::Receiver<Option<T>>,
+    handle: NotificationHandle,
+}
+
+impl<T> NotificationSubscription<T> {
+    fn cancel(&self) {
+        self.handle.cancel();
+    }
+
+    async fn recv(
+        &mut self,
+    ) -> std::result::Result<watch::Ref<'_, Option<T>>, NotificationSubcriptionError> {
+        if self.handle.is_cancelled() {
+            return Err(NotificationSubcriptionError::Cancelled);
+        };
+        self.receiver.changed().await?;
+        Ok(self.receiver.borrow_and_update())
+    }
+}
+
+// NOTES:
+// - Need to be able to externally unsubscribe_all
+// - So need to be able to both
+//   - Use an atomic bool to mark subscription as cancelled
+//   - Delete subscription from ADS
+// - TODO look upstream at how subscriptions are handled, how do we subscribe after a disconnection?
+
+#[derive(Debug, Error)]
+pub enum NotificationSubcriptionError {
+    #[error("notification subscription is cancelled")]
+    Cancelled,
+
+    #[error(transparent)]
+    Recv(#[from] watch::error::RecvError),
 }
 
 pub struct AdsClient {
     ads_client: ads::Client,
     symbol_handles: HashMap<String, SymbolHandle>,
+    notification_handles: Vec<NotificationHandle>,
 }
 
 /// Get u32 handle to the name in the write data. Index offset is 0.
@@ -38,6 +103,7 @@ impl AdsClient {
         Self {
             ads_client,
             symbol_handles: Default::default(),
+            notification_handles: Default::default(),
         }
     }
 
@@ -120,6 +186,33 @@ impl AdsClient {
         Ok(read_data)
     }
 
+    /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
+    pub async fn get_dynamic_type_tree(&self, symbol: &str) -> Result<SymbolTypeTree> {
+        let symbol_name = symbol;
+        let (symbols, type_map) = get_symbol_info(&self.ads_client).await?;
+        let mut symbol = None;
+
+        for symbol_info in symbols {
+            if symbol_info.name.to_lowercase() == symbol_name.to_lowercase() {
+                symbol = Some(symbol_info);
+            }
+        }
+
+        let Some(symbol) = symbol else {
+            return Ok(SymbolTypeTree::Missing);
+        };
+
+        let symbol_type_tree = match (&symbol, &type_map).try_into() {
+            Ok(symbol_type_tree) => symbol_type_tree,
+            Err(err) => {
+                println!("Error when getting symbol type from type map {err:?}");
+                return Ok(SymbolTypeTree::Unknown(symbol.size));
+            }
+        };
+
+        Ok(symbol_type_tree)
+    }
+
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters.
     pub async fn invoke_rpc_method<Params: AdsParams>(
         &mut self,
@@ -164,8 +257,7 @@ impl AdsClient {
     }
 
     /// Subscribes to a symbol and returns the notification handle.
-    /// TODO
-    pub async fn subscribe<T: AdsData>(
+    pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
         &mut self,
         symbol: &str,
     ) -> Result<NotificationSubscription<T>> {
@@ -181,14 +273,15 @@ impl AdsClient {
             // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
             cycle_time: 100_000, // (100,000 * 100ns) = 10,000,000 ns = 10 ms
         };
-        let handle: u32 = 0;
+        let mut ads_handle: u32 = 0;
 
-        let (notification_tx, notification_rx) = watch::channel(T::default());
-        let callback = |handle, timestamp, payload| {
+        let (notification_tx, notification_rx) = watch::channel(None);
+        let notification_tx = Arc::new(notification_tx);
+        let callback = move |_handle, _timestamp, payload| {
             // TODO(mw): Do we need to handle this failure better?
             let data = T::from_bytes(payload)
                 .expect("Failed to parse PlcDataType from notification bytes");
-            notification_tx.send(data);
+            notification_tx.clone().send(Some(data));
         };
 
         self.ads_client
@@ -196,101 +289,51 @@ impl AdsClient {
                 RW_SYMVAL_BYHANDLE,
                 index_offset,
                 &attributes,
-                &mut handle,
+                &mut ads_handle,
                 callback,
             )
             .await?;
 
+        let handle = NotificationHandle::new(ads_handle.clone());
+
+        self.notification_handles.push(handle.clone());
+
         let subscription = NotificationSubscription {
             receiver: notification_rx,
-            handle,
+            handle: handle,
         };
 
         Ok(subscription)
     }
 
-    pub async fn unsubscribe<T>(&self, subscription: NotificationSubcription<T>) -> Result<()> {
+    /// Unsubscribe from a symbol notification subscription.
+    pub async fn unsubscribe<T>(&self, subscription: NotificationSubscription<T>) -> Result<()> {
+        self.unsubscribe_handle(&subscription.handle).await
+    }
+
+    async fn unsubscribe_handle(&self, handle: &NotificationHandle) -> Result<()> {
+        handle.cancel();
+
         self.ads_client
-            .delete_device_notification(subscription.handle)
-            .await
-            .map_err(Into::into)
+            .delete_device_notification(handle.ads_handle)
+            .await?;
+
+        Ok(())
     }
 
-    /*
-
-            /// Deletes an ongoing subscription using its handle.
-    /// TODO
-    pub fn unsubscribe(&self, notification_handle: u32) {
-        // NB: unsure why, but deleting the notification returns a "Notification handle is invalid" error, hence the ok() here.
-        // It still works though, so maybe not a problem.
-        self.device().delete_notification(notification_handle).ok();
-    }
-     */
-
-    /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
-    /// TODO
-    pub fn get_dynamic_type_tree(&self, name: &str) -> Result<SymbolTypeTree> {
-        let (symbols, type_map) = ads::symbol::get_symbol_info(self.ads_device())?;
-        let mut symbol = None;
-
-        for symbol_info in symbols {
-            if symbol_info.name.to_lowercase() == name.to_lowercase() {
-                symbol = Some(symbol_info);
-            }
-        }
-
-        let Some(symbol) = symbol else {
-            return Ok(SymbolTypeTree::Missing);
-        };
-
-        let symbol_type_tree = match (&symbol, &type_map).try_into() {
-            Ok(symbol_type_tree) => symbol_type_tree,
-            Err(err) => {
-                println!("Error when getting symbol type from type map {err:?}");
-                return Ok(SymbolTypeTree::Unknown(symbol.size));
-            }
-        };
-
-        Ok(symbol_type_tree)
-    }
-
-    /// Subscribes to a symbol based off of its type tree and returns the handle as a u32.
-    /// TODO
-    pub fn add_dynamic_symbol_notification(
-        &mut self,
-        symbol: &str,
-        symbol_type_tree: &SymbolTypeTree,
-    ) -> Result<u32> {
-        let index_offset = self.symbol_handle(symbol)?.as_u32();
-
-        let notif_handle = self.ads_device().add_notification(
-            RW_SYMVAL_BYHANDLE,
-            index_offset,
-            &ads::notif::Attributes::new(
-                symbol_type_tree.get_size(),
-                ads::notif::TransmissionMode::ServerOnChange,
-                std::time::Duration::ZERO,
-                std::time::Duration::from_millis(10),
-            ),
-        )?;
-
-        Ok(notif_handle)
-    }
-
-    /// Get a crossbeam channel receiver for all ADS notifications.
-    /// TODO
-    pub fn notification_receiver(&self) -> Receiver<ads::notif::Notification> {
-        self.ads_client().get_notification_channel()
-    }
-
-    /// Deletes all ongoing symbol subscriptions.
-    /// TODO
+    /// Deletes all ongoing symbol notification subscriptions.
     pub fn unsubscribe_all(&mut self) {
         for notification_handle in &self.notification_handles {
-            self.unsubscribe(*notification_handle);
+            self.unsubscribe_handle(notification_handle);
         }
 
         self.notification_handles.clear();
+    }
+}
+
+impl Drop for AdsClient {
+    fn drop(&mut self) {
+        self.unsubscribe_all();
     }
 }
 

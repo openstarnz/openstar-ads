@@ -91,7 +91,6 @@ impl AdsConnection {
                     n_error: 0x006,
                     s_msg: _
                 })
-                | AdsError::Reply(_, "unexpected invoke ID", _) // TODO(mw): This is a hangover from the ads library, we should probably remove.
         );
 
         if should_disconnect {

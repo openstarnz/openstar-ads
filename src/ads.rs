@@ -12,7 +12,7 @@ pub struct Plc {
     timeout: Option<Timeout>,
     retry_delay: Option<Duration>,
     set_to_run_mode: bool,
-    connection: Arc<Mutex<AdsConnection>>,
+    connection: AdsConnection,
 }
 
 // Note(mw): We need our own Timeout enum, only because
@@ -34,7 +34,7 @@ impl From<Timeout> for ads::AdsTimeout {
     }
 }
 
-/// Provides a more user friendly wrapper to interact with the OpenStar PLC's.
+/// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
 #[bon]
 impl Plc {
     #[builder]
@@ -55,38 +55,22 @@ impl Plc {
         }
     }
 
-    /// Loops to keep a PLC connected over ADS.
-    pub async fn connection_loop(&self) {
-        loop {
-            if !self.is_connected() {
-                let mut connection = self.connection.lock().await;
-                if let Err(error) = connection
-                    .connect(
-                        &self.addr,
-                        self.port,
-                        self.timeout.clone().map(Into::into),
-                        self.retry_delay,
-                        self.set_to_run_mode,
-                    )
-                    .await
-                {
-                    println!("PLC connection failed, {}. Retrying in 2 seconds...", error);
-                } else {
-                    println!("PLC connection successful!");
-                }
-            }
-
-            std::thread::sleep(Duration::from_secs(2));
-        }
+    async fn ensure_connected(&self) {
+        self.connection.ensure_connected(
+            self.addr,
+            self.port,
+            self.timeout,
+            self.retry_delay,
+            self.set_to_run_mode,
+        )
     }
 
-    /// Disconnects the internal PLC client
+    /// Disconnects the internal ADS client
     pub async fn disconnect(&self) {
-        let mut connection = self.connection.lock().await;
         connection.disconnect();
     }
 
-    pub fn is_connected(&self) -> bool {
+    pub async fn is_connected(&self) -> bool {
         let connection = self.connection.lock().await;
         match *connection {
             AdsConnection::Connected(_) => true,
@@ -104,7 +88,7 @@ impl Plc {
         if let Some(client) = connection.client_mut() {
             let type_tree = client.get_dynamic_type_tree(name).map_err(|error| {
                 println!(
-                    "PLC client error when getting information for symbol {}: {}",
+                    "ADS client error when getting information for symbol {}: {}",
                     name, error
                 );
 
@@ -397,35 +381,24 @@ impl Plc {
     /// Subscribes to a notification channel on the PLC, returning a handle to the channel.
     ///
     /// Returns None if the PLC is not connected.
-    pub fn subscribe<T: AdsData>(&self, name: &str) -> Result<Option<u32>> {
+    pub async fn subscribe<T: AdsData>(&self, name: &str) -> Result<NotificationSubscription<T>> {
         let mut connection = self.connection.lock().await;
 
-        if let Some(client) = connection.client_mut() {
-            let handle = client.subscribe::<T>(name).map_err(|error| {
-                eprintln!(
-                    "PLC client error when subscribing to notifications from {}: {}",
-                    name, error
-                );
+        let Some(client) = connection.client_mut() else {
+            return Ok(None);
+        };
 
-                connection.handle_disconnect_error(&error);
+        let subscription = client.subscribe::<T>(name).map_err(|error| {
+            eprintln!(
+                "PLC client error when subscribing to notifications from {}: {}",
+                name, error
+            );
 
-                error
-            })?;
+            connection.handle_disconnect_error(&error);
 
-            return Ok(Some(handle));
-        }
+            error
+        })?;
 
-        Ok(None)
-    }
-
-    /// Gets a notification receiver that streams symbol data as it changes on the PLC.
-    ///
-    /// A symbol must first be subscribed using the subscribe function.
-    pub fn notification_receiver(&self) -> Option<Receiver<ads::notif::Notification>> {
-        let connection = self.connection.lock().await;
-
-        connection
-            .client()
-            .map(|client| client.notification_receiver())
+        return Ok(Some(subscription));
     }
 }
