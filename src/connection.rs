@@ -3,16 +3,13 @@ use std::time::Duration;
 
 use crate::{AdsClient, AdsError, Result};
 
+#[derive(Default)]
 pub enum AdsConnection {
     Connected(AdsClient),
+    #[default]
     Disconnected,
 }
 
-impl Default for AdsConnection {
-    fn default() -> Self {
-        Self::Disconnected
-    }
-}
 
 impl AdsConnection {
     pub async fn connect(

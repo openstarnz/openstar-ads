@@ -198,7 +198,7 @@ impl AdsClient {
         params: Params,
     ) -> Result<()> {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
-        let write_data = params.as_data();
+        let write_data = params.into_data();
 
         read_write_exact(
             &self.ads_client,
@@ -220,7 +220,7 @@ impl AdsClient {
     ) -> Result<Value> {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
         let mut read_data = Value::default();
-        let write_data = params.as_data();
+        let write_data = params.into_data();
 
         read_write_exact(
             &self.ads_client,
@@ -307,13 +307,13 @@ impl AdsClient {
             )
             .await?;
 
-        let handle = NotificationHandle::new(ads_handle.clone());
+        let handle = NotificationHandle::new(ads_handle);
 
         self.notification_handles.push(handle.clone());
 
         let subscription = NotificationSubscription {
             receiver: notification_rx,
-            handle: handle,
+            handle,
         };
 
         Ok(subscription)
