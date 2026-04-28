@@ -10,8 +10,8 @@ use std::{
 use tokio::sync::mpsc;
 
 use crate::{
-    get_symbol_info, AdsData, AdsError, AdsParams, Result, Symbol, SymbolMap, SymbolMapExt,
-    SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree, TypeMap,
+    get_symbol_info, AdsData, AdsError, AdsParams, Result, SymbolMap, SymbolMapExt, SymbolTree,
+    SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -53,11 +53,11 @@ pub struct NotificationSubscription<T> {
 }
 
 impl<T> NotificationSubscription<T> {
-    fn cancel(&self) {
+    pub fn cancel(&self) {
         self.handle.cancel();
     }
 
-    async fn recv(&mut self) -> Option<T> {
+    pub async fn recv(&mut self) -> Option<T> {
         if self.handle.is_cancelled() {
             return None;
         };
@@ -112,10 +112,6 @@ impl AdsClient {
         };
 
         Ok(handle)
-    }
-
-    async fn get_symbol_info(&self) -> Result<(Vec<Symbol>, TypeMap)> {
-        get_symbol_info(&self.ads_client).await
     }
 
     /// Returns if the connected ADS device is in run mode.
@@ -297,7 +293,8 @@ impl AdsClient {
         let (notification_tx, notification_rx) = mpsc::unbounded_channel();
         let callback = move |_handle, _timestamp, payload| {
             let data = from_bytes(payload);
-            notification_tx.send(data);
+            // TODO(mw): Should we handle this error?
+            let _ = notification_tx.send(data);
         };
 
         self.ads_client
@@ -322,15 +319,15 @@ impl AdsClient {
         Ok(subscription)
     }
 
-    /// Unsubscribe from a symbol notification subscription.
+    /// Unsubscribe from a notification subscription.
     pub async fn unsubscribe<T>(&self, subscription: NotificationSubscription<T>) -> Result<()> {
         self.unsubscribe_handle(&subscription.handle).await
     }
 
-    /// Deletes all ongoing symbol notification subscriptions.
+    /// Deletes all ongoing notification subscriptions.
     pub async fn unsubscribe_all(&mut self) -> Result<()> {
         for notification_handle in &self.notification_handles {
-            self.unsubscribe_handle(notification_handle).await;
+            self.unsubscribe_handle(notification_handle).await?;
         }
 
         self.notification_handles.clear();

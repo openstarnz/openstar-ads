@@ -1,4 +1,4 @@
-//! openstar-ads is a wrapper around the ads-client rust crate to improve the management of PLC connections and symbol subscriptions.
+//! openstar-ads is a wrapper around the `ads_client` Rust crate to improve the management of ADS connections and symbol subscriptions.
 
 mod ads;
 mod client;

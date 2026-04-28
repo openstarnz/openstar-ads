@@ -1,12 +1,11 @@
 use ads_client as ads;
 use bon::bon;
-use crossbeam_channel::Receiver;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 use crate::{
     AdsConnection, AdsData, AdsError, AdsParams, NotificationSubscription, Result, SymbolMap,
-    SymbolTree, SymbolTypeTree, SymbolTypeTreeError,
+    SymbolTree, SymbolTypeTree,
 };
 
 pub struct Ads {
@@ -84,9 +83,10 @@ impl Ads {
     }
 
     /// Disconnects the internal ADS client
-    async fn disconnect(&self) {
+    pub async fn disconnect(&self) -> Result<()> {
         let mut connection = self.connection.lock().await;
-        connection.disconnect().await;
+        connection.disconnect().await?;
+        Ok(())
     }
 
     pub async fn is_connected(&self) -> bool {
@@ -112,7 +112,7 @@ impl Ads {
             Err(error) => {
                 println!("PLC client error when reading symbol {}: {}", symbol, error);
 
-                connection.handle_disconnect_error(&error).await;
+                connection.handle_disconnect_error(&error).await?;
 
                 Err(error)
             }
@@ -140,9 +140,9 @@ impl Ads {
 
                 match &error {
                     AdsError::SymbolTypeTree(_symbol_type_tree_error) => {
-                        connection.disconnect().await
+                        connection.disconnect().await?
                     }
-                    error => connection.handle_disconnect_error(error).await,
+                    error => connection.handle_disconnect_error(error).await?,
                 };
 
                 Err(error)
@@ -170,7 +170,7 @@ impl Ads {
                 symbol, error
             );
 
-            connection.handle_disconnect_error(&error);
+            connection.handle_disconnect_error(&error).await?;
 
             return Err(error);
         };
@@ -200,7 +200,7 @@ impl Ads {
                     symbol, error
                 );
 
-                connection.handle_disconnect_error(&error);
+                connection.handle_disconnect_error(&error).await?;
 
                 Err(error)
             }
@@ -228,7 +228,7 @@ impl Ads {
                     symbol, error
                 );
 
-                connection.handle_disconnect_error(&error);
+                connection.handle_disconnect_error(&error).await?;
 
                 Err(error)
             }
@@ -258,7 +258,7 @@ impl Ads {
                     symbol, error
                 );
 
-                connection.handle_disconnect_error(&error);
+                connection.handle_disconnect_error(&error).await?;
 
                 Err(error)
             }
@@ -289,10 +289,21 @@ impl Ads {
                     symbol, error
                 );
 
-                connection.handle_disconnect_error(&error);
+                connection.handle_disconnect_error(&error).await?;
 
                 Err(error)
             }
         }
+    }
+
+    /// Unsubscribe from a notification subscription.
+    pub async fn unsubscribe<T>(&self, subscription: NotificationSubscription<T>) -> Result<()> {
+        let mut connection = self.connection.lock().await;
+
+        let Some(client) = connection.client_mut() else {
+            return Ok(());
+        };
+
+        client.unsubscribe(subscription).await
     }
 }

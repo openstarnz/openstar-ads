@@ -53,10 +53,10 @@ impl AdsConnection {
         Ok(())
     }
 
-    pub async fn disconnect(&mut self) {
+    pub async fn disconnect(&mut self) -> Result<()> {
         match self {
             AdsConnection::Connected(plc_client) => {
-                plc_client.unsubscribe_all().await;
+                plc_client.unsubscribe_all().await?;
 
                 *self = AdsConnection::Disconnected;
 
@@ -66,8 +66,11 @@ impl AdsConnection {
                 // Already disconnected...
             }
         }
+
+        Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn client(&self) -> Option<&AdsClient> {
         match self {
             AdsConnection::Connected(plc_client) => Some(plc_client),
@@ -82,7 +85,7 @@ impl AdsConnection {
         }
     }
 
-    pub async fn handle_disconnect_error(&mut self, error: &AdsError) {
+    pub async fn handle_disconnect_error(&mut self, error: &AdsError) -> Result<()> {
         // TODO(mw): We should have a think about this.
         let should_disconnect = matches!(
             error,
@@ -96,7 +99,9 @@ impl AdsConnection {
         if should_disconnect {
             println!("PLC client error indicates we should disconnect...");
 
-            self.disconnect().await;
+            self.disconnect().await?;
         }
+
+        Ok(())
     }
 }
