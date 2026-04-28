@@ -37,7 +37,7 @@ impl AdsConnection {
                 let client = AdsClient::new(ads_client);
 
                 if !client.is_run_mode().await? && set_to_run_mode {
-                    client.set_to_run_mode()?;
+                    client.set_to_run_mode().await?;
                 }
 
                 if !client.is_run_mode().await? {
@@ -53,10 +53,10 @@ impl AdsConnection {
         Ok(())
     }
 
-    pub fn disconnect(&mut self) {
+    pub async fn disconnect(&mut self) {
         match self {
             AdsConnection::Connected(plc_client) => {
-                plc_client.unsubscribe_all();
+                plc_client.unsubscribe_all().await;
 
                 *self = AdsConnection::Disconnected;
 
@@ -82,7 +82,7 @@ impl AdsConnection {
         }
     }
 
-    pub fn handle_disconnect_error(&mut self, error: &AdsError) {
+    pub async fn handle_disconnect_error(&mut self, error: &AdsError) {
         // TODO(mw): We should have a think about this.
         let should_disconnect = matches!(
             error,
@@ -96,7 +96,7 @@ impl AdsConnection {
         if should_disconnect {
             println!("PLC client error indicates we should disconnect...");
 
-            self.disconnect();
+            self.disconnect().await;
         }
     }
 }

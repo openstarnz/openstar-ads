@@ -47,8 +47,8 @@ pub struct PrimitiveSymbolDescriptor {
     root_symbol_offset: SymbolOffset,
 }
 
-impl From<(PrimitiveSymbolType, SymbolOffset)> for PrimitiveSymbolDescriptor {
-    fn from((symbol_type, offset): (PrimitiveSymbolType, SymbolOffset)) -> Self {
+impl PrimitiveSymbolDescriptor {
+    pub fn from_type(symbol_type: PrimitiveSymbolType, offset: SymbolOffset) -> Self {
         PrimitiveSymbolDescriptor {
             symbol_type,
             root_symbol_offset: offset,
@@ -117,7 +117,10 @@ impl SymbolTypeMapExt for SymbolTypeMap {
                     }
                     map.insert(
                         path,
-                        (PrimitiveSymbolType::TimeStruct(offsets), offset).into(),
+                        PrimitiveSymbolDescriptor::from_type(
+                            PrimitiveSymbolType::TimeStruct(offsets),
+                            offset,
+                        ),
                     );
                 } else {
                     for (child_path, (child_tree, child_offset)) in index_map {
@@ -140,58 +143,112 @@ impl SymbolTypeMapExt for SymbolTypeMap {
                 }
             }
             SymbolTypeTree::Int => {
-                map.insert(path, (PrimitiveSymbolType::Int, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Int, offset),
+                );
             }
             SymbolTypeTree::Dint => {
-                map.insert(path, (PrimitiveSymbolType::Dint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Dint, offset),
+                );
             }
             SymbolTypeTree::Real => {
-                map.insert(path, (PrimitiveSymbolType::Real, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Real, offset),
+                );
             }
             SymbolTypeTree::Lreal => {
-                map.insert(path, (PrimitiveSymbolType::Lreal, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Lreal, offset),
+                );
             }
             SymbolTypeTree::Sint => {
-                map.insert(path, (PrimitiveSymbolType::Sint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Sint, offset),
+                );
             }
             SymbolTypeTree::Usint => {
-                map.insert(path, (PrimitiveSymbolType::Usint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Usint, offset),
+                );
             }
             SymbolTypeTree::Uint => {
-                map.insert(path, (PrimitiveSymbolType::Uint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Uint, offset),
+                );
             }
             SymbolTypeTree::Udint => {
-                map.insert(path, (PrimitiveSymbolType::Udint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Udint, offset),
+                );
             }
             SymbolTypeTree::Lint => {
-                map.insert(path, (PrimitiveSymbolType::Lint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Lint, offset),
+                );
             }
             SymbolTypeTree::Ulint => {
-                map.insert(path, (PrimitiveSymbolType::Ulint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Ulint, offset),
+                );
             }
             SymbolTypeTree::String(size) => {
-                map.insert(path, (PrimitiveSymbolType::String(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::String(size), offset),
+                );
             }
             SymbolTypeTree::Wstring(size) => {
-                map.insert(path, (PrimitiveSymbolType::Wstring(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(
+                        PrimitiveSymbolType::Wstring(size),
+                        offset,
+                    ),
+                );
             }
             SymbolTypeTree::Real80 => {
-                map.insert(path, (PrimitiveSymbolType::Real80, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Real80, offset),
+                );
             }
             SymbolTypeTree::Bool => {
-                map.insert(path, (PrimitiveSymbolType::Bool, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Bool, offset),
+                );
             }
             // This is not implemented yet as getting the type the Array contains is elusive
             // Converts to void so that the consumer can attempt to retrieve the data
             SymbolTypeTree::Array(_symbol_type_tree, size) => {
-                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Void(size), offset),
+                );
             }
             SymbolTypeTree::Void(size) => {
-                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Void(size), offset),
+                );
             }
             // Converts to void so that the consumer can attempt to retrieve the data
             SymbolTypeTree::Unknown(size) => {
-                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Void(size), offset),
+                );
             }
             // This is a conversion type and represents that
             SymbolTypeTree::Compound(_) => {

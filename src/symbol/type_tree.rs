@@ -61,8 +61,22 @@ impl SymbolTypeTree {
     }
 }
 
-impl From<(u32, usize)> for SymbolTypeTree {
-    fn from((type_id, size): (u32, usize)) -> Self {
+impl SymbolTypeTree {
+    pub fn from_symbol(
+        symbol: &Symbol,
+        type_map: &HashMap<String, Type>,
+    ) -> Result<Self, SymbolTypeTreeError> {
+        Self::try_from_type_or_field(symbol.base_type, symbol.size, &symbol.typ, type_map)
+    }
+
+    pub fn from_field(
+        field: &Field,
+        type_map: &HashMap<String, Type>,
+    ) -> Result<Self, SymbolTypeTreeError> {
+        Self::try_from_type_or_field(field.base_type, field.size, &field.typ, type_map)
+    }
+
+    fn from_type_id(type_id: u32, size: usize) -> Self {
         match type_id {
             0 => Self::Void(size),
             2 => Self::Int,
@@ -85,66 +99,45 @@ impl From<(u32, usize)> for SymbolTypeTree {
             }
         }
     }
-}
 
-impl TryFrom<(&Symbol, &HashMap<String, Type>)> for SymbolTypeTree {
-    type Error = SymbolTypeTreeError;
+    fn try_from_type_or_field(
+        base_type: u32,
+        size: usize,
+        type_name: &str,
+        type_map: &HashMap<String, Type>,
+    ) -> Result<Self, SymbolTypeTreeError> {
+        let mut tree = Self::from_type_id(base_type, size);
 
-    fn try_from(
-        (symbol, type_map): (&Symbol, &HashMap<String, Type>),
-    ) -> Result<Self, Self::Error> {
-        try_from_type_or_field(symbol.base_type, symbol.size, &symbol.typ, type_map)
-    }
-}
+        if let SymbolTypeTree::Compound(_struct_size) = tree {
+            let tree_type = type_map
+                .get(type_name)
+                .ok_or_else(|| SymbolTypeTreeError::MissingSymbolTypeInfo(type_name.to_string()))?;
+            if !tree_type.fields.is_empty() {
+                let mut struct_map = IndexMap::new();
 
-impl TryFrom<(&Field, &HashMap<String, Type>)> for SymbolTypeTree {
-    type Error = SymbolTypeTreeError;
+                for field in &tree_type.fields {
+                    struct_map.insert(
+                        field.name.clone(),
+                        (
+                            Self::from_field(field, type_map)
+                                .unwrap_or(SymbolTypeTree::Unknown(field.size)),
+                            field.offset,
+                        ),
+                    );
+                }
 
-    fn try_from((field, type_map): (&Field, &HashMap<String, Type>)) -> Result<Self, Self::Error> {
-        try_from_type_or_field(field.base_type, field.size, &field.typ, type_map)
-    }
-}
-
-fn try_from_type_or_field(
-    base_type: u32,
-    size: usize,
-    type_name: &str,
-    type_map: &HashMap<String, Type>,
-) -> Result<SymbolTypeTree, SymbolTypeTreeError> {
-    let mut tree = (base_type, size).into();
-
-    if let SymbolTypeTree::Compound(_struct_size) = tree {
-        let tree_type = type_map
-            .get(type_name)
-            .ok_or_else(|| SymbolTypeTreeError::MissingSymbolTypeInfo(type_name.to_string()))?;
-        if !tree_type.fields.is_empty() {
-            let mut struct_map = IndexMap::new();
-
-            for field in &tree_type.fields {
-                struct_map.insert(
-                    field.name.clone(),
-                    (
-                        (field, type_map)
-                            .try_into()
-                            .unwrap_or(SymbolTypeTree::Unknown(field.size)),
-                        field.offset,
-                    ),
+                tree = SymbolTypeTree::Struct(struct_map, tree_type.size);
+            } else {
+                tree = SymbolTypeTree::Array(Box::new(SymbolTypeTree::Usint), size);
+                println!(
+                    "Warn: Dynamic symbol deserialisation is unsupported for arrays, converting to"
                 );
             }
-
-            tree = SymbolTypeTree::Struct(struct_map, tree_type.size);
-        } else {
-            tree = SymbolTypeTree::Array(Box::new(SymbolTypeTree::Usint), size);
-            println!(
-                "Warn: Dynamic symbol deserialisation is unsupported for arrays, converting to"
-            );
         }
+
+        Ok(tree)
     }
 
-    Ok(tree)
-}
-
-impl SymbolTypeTree {
     // Symbol path nodes are separated by periods.
     pub fn get_child(&self, symbol_path: &str) -> &SymbolTypeTree {
         let path_tokens = symbol_path.split(".");

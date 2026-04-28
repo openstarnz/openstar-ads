@@ -1,7 +1,7 @@
+use thiserror::Error;
 /**
  * A latin-1 16 Character String for Beckhoff ADS. Includes a 0 for null termination.
  */
-use anyhow::{anyhow, bail};
 use zerocopy::FromZeroes;
 
 use crate::data_types::AdsData;
@@ -10,21 +10,25 @@ use crate::data_types::AdsData;
 #[repr(C)]
 pub struct AdsString16 {
     inner: [u8; 16],
-    null_terminator: u8, // The PLC spec includes one byte of null termination
+    null_terminator: u8, // The ADS spec includes one byte of null termination
 }
 
 impl AdsData for AdsString16 {}
 
+#[derive(Debug, Error, Clone)]
+pub enum AdsString16FromStringError {
+    #[error("Could not convert from String. Longer than 16 bytes.")]
+    LongerThan16Bytes,
+}
+
 impl TryFrom<String> for AdsString16 {
-    type Error = anyhow::Error;
+    type Error = AdsString16FromStringError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         let src = value.as_bytes();
         let src_len = src.len();
         if src_len > 16 {
-            return Err(anyhow!(
-                "Could not convert from String. Longer than 16 bytes."
-            ));
+            return Err(AdsString16FromStringError::LongerThan16Bytes);
         }
         let mut blank = AdsString16::new_zeroed();
         // Does not use from_bytes as it does not need the length to match perfectly
@@ -44,13 +48,22 @@ impl From<AdsString16> for String {
     }
 }
 
+#[derive(Debug, Error, Clone)]
+#[error("Null terminator is {null_terminator} not 0.")]
+pub struct AdsString16CheckTerminatorError {
+    null_terminator: u8,
+}
+
 impl AdsString16 {
     // Returns an error if the null terminator is not zero.
-    pub fn check_terminator(&self) -> anyhow::Result<()> {
+    pub fn check_terminator(&self) -> Result<(), AdsString16CheckTerminatorError> {
         if self.null_terminator != 0 {
-            bail!("Null terminator is {} not 0.", self.null_terminator);
+            Err(AdsString16CheckTerminatorError {
+                null_terminator: self.null_terminator,
+            })
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 }
 

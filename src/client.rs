@@ -6,8 +6,7 @@ use std::{
         Arc,
     },
 };
-use thiserror::Error;
-use tokio::sync::watch;
+use tokio::sync::mpsc;
 
 use crate::{
     get_symbol_info, AdsData, AdsError, AdsParams, Result, Symbol, SymbolTypeTree, TypeMap,
@@ -47,7 +46,7 @@ impl NotificationHandle {
 
 #[derive(Debug)]
 pub struct NotificationSubscription<T> {
-    receiver: watch::Receiver<Option<T>>,
+    receiver: mpsc::UnboundedReceiver<T>,
     handle: NotificationHandle,
 }
 
@@ -56,31 +55,12 @@ impl<T> NotificationSubscription<T> {
         self.handle.cancel();
     }
 
-    async fn recv(
-        &mut self,
-    ) -> std::result::Result<watch::Ref<'_, Option<T>>, NotificationSubcriptionError> {
+    async fn recv(&mut self) -> Option<T> {
         if self.handle.is_cancelled() {
-            return Err(NotificationSubcriptionError::Cancelled);
+            return None;
         };
-        self.receiver.changed().await?;
-        Ok(self.receiver.borrow_and_update())
+        self.receiver.recv().await
     }
-}
-
-// NOTES:
-// - Need to be able to externally unsubscribe_all
-// - So need to be able to both
-//   - Use an atomic bool to mark subscription as cancelled
-//   - Delete subscription from ADS
-// - TODO look upstream at how subscriptions are handled, how do we subscribe after a disconnection?
-
-#[derive(Debug, Error)]
-pub enum NotificationSubcriptionError {
-    #[error("notification subscription is cancelled")]
-    Cancelled,
-
-    #[error(transparent)]
-    Recv(#[from] watch::error::RecvError),
 }
 
 pub struct AdsClient {
@@ -202,11 +182,11 @@ impl AdsClient {
             return Ok(SymbolTypeTree::Missing);
         };
 
-        let symbol_type_tree = match (&symbol, &type_map).try_into() {
+        let symbol_type_tree = match SymbolTypeTree::from_symbol(&symbol, &type_map) {
             Ok(symbol_type_tree) => symbol_type_tree,
             Err(err) => {
                 println!("Error when getting symbol type from type map {err:?}");
-                return Ok(SymbolTypeTree::Unknown(symbol.size));
+                SymbolTypeTree::Unknown(symbol.size)
             }
         };
 
@@ -275,13 +255,12 @@ impl AdsClient {
         };
         let mut ads_handle: u32 = 0;
 
-        let (notification_tx, notification_rx) = watch::channel(None);
-        let notification_tx = Arc::new(notification_tx);
+        let (notification_tx, notification_rx) = mpsc::unbounded_channel();
         let callback = move |_handle, _timestamp, payload| {
             // TODO(mw): Do we need to handle this failure better?
             let data = T::from_bytes(payload)
                 .expect("Failed to parse PlcDataType from notification bytes");
-            notification_tx.clone().send(Some(data));
+            notification_tx.send(data);
         };
 
         self.ads_client
@@ -311,6 +290,17 @@ impl AdsClient {
         self.unsubscribe_handle(&subscription.handle).await
     }
 
+    /// Deletes all ongoing symbol notification subscriptions.
+    pub async fn unsubscribe_all(&mut self) -> Result<()> {
+        for notification_handle in &self.notification_handles {
+            self.unsubscribe_handle(notification_handle).await;
+        }
+
+        self.notification_handles.clear();
+
+        Ok(())
+    }
+
     async fn unsubscribe_handle(&self, handle: &NotificationHandle) -> Result<()> {
         handle.cancel();
 
@@ -319,21 +309,6 @@ impl AdsClient {
             .await?;
 
         Ok(())
-    }
-
-    /// Deletes all ongoing symbol notification subscriptions.
-    pub fn unsubscribe_all(&mut self) {
-        for notification_handle in &self.notification_handles {
-            self.unsubscribe_handle(notification_handle);
-        }
-
-        self.notification_handles.clear();
-    }
-}
-
-impl Drop for AdsClient {
-    fn drop(&mut self) {
-        self.unsubscribe_all();
     }
 }
 

@@ -1,4 +1,5 @@
-use super::symbol_type_tree::SymbolTypeTree;
+use super::type_tree::SymbolTypeTree;
+use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -29,8 +30,12 @@ pub enum SymbolTree {
     Unknown,
 }
 
-impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
-    fn from((symbol_type_tree, data, parent_offset): (&SymbolTypeTree, &[u8], usize)) -> Self {
+impl SymbolTree {
+    pub fn from_bytes(
+        data: Bytes,
+        symbol_type_tree: &SymbolTypeTree,
+        parent_offset: usize,
+    ) -> Self {
         if parent_offset > data.len() {
             println!(
                 "Offset of {parent_offset} greater than data length of {}.",
@@ -47,7 +52,11 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                         let child_offset = *offset as usize;
                         tree_map.insert(
                             name.clone(),
-                            (field_type_tree, data, parent_offset + child_offset).into(),
+                            SymbolTree::from_bytes(
+                                data.clone(),
+                                field_type_tree,
+                                parent_offset + child_offset,
+                            ),
                         );
                     } else {
                         tree_map.insert(name.clone(), Self::Missing);

@@ -4,15 +4,18 @@ use crossbeam_channel::Receiver;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
-use crate::{AdsConnection, AdsData, AdsError, AdsParams, SymbolTypeTree, SymbolTypeTreeError};
+use crate::{
+    AdsConnection, AdsData, AdsError, AdsParams, NotificationSubscription, Result, SymbolTypeTree,
+    SymbolTypeTreeError,
+};
 
-pub struct Plc {
+pub struct Ads {
     addr: String,
     port: u16,
     timeout: Option<Timeout>,
     retry_delay: Option<Duration>,
     set_to_run_mode: bool,
-    connection: AdsConnection,
+    connection: Arc<Mutex<AdsConnection>>,
 }
 
 // Note(mw): We need our own Timeout enum, only because
@@ -36,7 +39,7 @@ impl From<Timeout> for ads::AdsTimeout {
 
 /// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
 #[bon]
-impl Plc {
+impl Ads {
     #[builder]
     pub fn new(
         addr: String,
@@ -55,19 +58,35 @@ impl Plc {
         }
     }
 
-    async fn ensure_connected(&self) {
-        self.connection.ensure_connected(
-            self.addr,
-            self.port,
-            self.timeout,
-            self.retry_delay,
-            self.set_to_run_mode,
-        )
+    /// Blocks the current thread until a PLC is successfully connected over ADS.
+    pub async fn run_connection_loop(&self) {
+        loop {
+            if !self.is_connected().await {
+                let mut connection = self.connection.lock().await;
+                if let Err(error) = connection
+                    .connect(
+                        &self.addr,
+                        self.port,
+                        self.timeout.clone().map(Into::into),
+                        self.retry_delay,
+                        self.set_to_run_mode,
+                    )
+                    .await
+                {
+                    println!("PLC connection failed, {}. Retrying in 2 seconds...", error);
+                } else {
+                    println!("PLC connection successful!");
+                }
+            }
+
+            std::thread::sleep(Duration::from_secs(2));
+        }
     }
 
     /// Disconnects the internal ADS client
-    pub async fn disconnect(&self) {
-        connection.disconnect();
+    async fn disconnect(&self) {
+        let mut connection = self.connection.lock().await;
+        connection.disconnect().await;
     }
 
     pub async fn is_connected(&self) -> bool {
@@ -78,32 +97,142 @@ impl Plc {
         }
     }
 
+    /// Read a symbol from the PLC.
+    ///
+    /// Returns None if the PLC is not connected.
+    pub async fn read_symbol<T: AdsData>(&self, symbol: &str) -> Result<Option<T>> {
+        let mut connection = self.connection.lock().await;
+
+        let Some(client) = connection.client_mut() else {
+            return Ok(None);
+        };
+
+        match client.read_symbol(symbol).await {
+            Ok(value) => Ok(Some(value)),
+            Err(error) => {
+                println!("PLC client error when reading symbol {}: {}", symbol, error);
+
+                connection.handle_disconnect_error(&error).await;
+
+                Err(error)
+            }
+        }
+    }
+
     /// Gets a symbol type tree for a given symbol path.
     ///
     /// Returns None if the PLC is not connected.
     /// Returns any errors from the PLC
-    pub async fn get_dynamic_type_tree(&self, name: &str) -> Result<Option<SymbolTypeTree>> {
+    pub async fn get_dynamic_type_tree(&self, symbol: &str) -> Result<Option<SymbolTypeTree>> {
         let mut connection = self.connection.lock().await;
 
-        if let Some(client) = connection.client_mut() {
-            let type_tree = client.get_dynamic_type_tree(name).map_err(|error| {
+        let Some(client) = connection.client_mut() else {
+            return Ok(None);
+        };
+
+        match client.get_dynamic_type_tree(symbol).await {
+            Ok(type_tree) => Ok(Some(type_tree)),
+            Err(error) => {
                 println!(
                     "ADS client error when getting information for symbol {}: {}",
-                    name, error
+                    symbol, error
                 );
 
                 match &error {
-                    AdsError::SymbolTypeTree(_symbol_type_tree_error) => connection.disconnect(),
-                    error => connection.handle_disconnect_error(error),
+                    AdsError::SymbolTypeTree(_symbol_type_tree_error) => {
+                        connection.disconnect().await
+                    }
+                    error => connection.handle_disconnect_error(error).await,
                 };
 
-                error
-            })?;
-
-            return Ok(Some(type_tree));
+                Err(error)
+            }
         }
+    }
 
-        Ok(None)
+    /// Calls an RPC method on the PLC.
+    ///
+    /// Returns None if the PLC is not connected.
+    pub async fn invoke_rpc_method<Params: AdsParams>(
+        &self,
+        symbol: &str,
+        params: Params,
+    ) -> Result<Option<()>> {
+        let mut connection = self.connection.lock().await;
+
+        let Some(client) = connection.client_mut() else {
+            return Ok(None);
+        };
+
+        if let Err(error) = client.invoke_rpc_method(symbol, params).await {
+            eprintln!(
+                "PLC client error when invoking RPC method {}: {}",
+                symbol, error
+            );
+
+            connection.handle_disconnect_error(&error);
+
+            return Err(error);
+        };
+
+        Ok(Some(()))
+    }
+
+    /// Calls an RPC method on the PLC that returns a value.
+    ///
+    /// Returns None if the PLC is not connected.
+    pub async fn fetch_from_rpc_method<Params: AdsParams, Value: AdsData>(
+        &self,
+        symbol: &str,
+        params: Params,
+    ) -> Result<Option<Value>> {
+        let mut connection = self.connection.lock().await;
+
+        let Some(client) = connection.client_mut() else {
+            return Ok(None);
+        };
+
+        match client.fetch_from_rpc_method(symbol, params).await {
+            Ok(value) => Ok(Some(value)),
+            Err(error) => {
+                eprintln!(
+                    "PLC client error when invoking RPC method {}: {}",
+                    symbol, error
+                );
+
+                connection.handle_disconnect_error(&error);
+
+                Err(error)
+            }
+        }
+    }
+
+    /// Subscribes to a notification channel on the PLC, returning a handle to the channel.
+    ///
+    /// Returns None if the PLC is not connected.
+    pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
+        &self,
+        symbol: &str,
+    ) -> Result<Option<NotificationSubscription<T>>> {
+        let mut connection = self.connection.lock().await;
+
+        let Some(client) = connection.client_mut() else {
+            return Ok(None);
+        };
+
+        match client.subscribe::<T>(symbol).await {
+            Ok(subscription) => Ok(Some(subscription)),
+            Err(error) => {
+                eprintln!(
+                    "PLC client error when subscribing to notifications from {}: {}",
+                    symbol, error
+                );
+
+                connection.handle_disconnect_error(&error);
+
+                Err(error)
+            }
+        }
     }
 
     /// Subscribes to the given symbol using the symbol type tree and sends deserialised tree-like data back with the sender channel.
@@ -112,7 +241,7 @@ impl Plc {
     /// Returns any errors from the PLC.
     pub async fn start_dynamic_symbol_receiver(
         &self,
-        name: String,
+        symbol: String,
         symbol_type_tree: SymbolTypeTree,
         sender_channel: broadcast::Sender<SymbolTree>,
     ) -> Result<Option<()>> {
@@ -123,11 +252,11 @@ impl Plc {
             if let Some(client) = connection.client_mut() {
                 notif_handle = Some(
                     client
-                        .add_dynamic_symbol_notification(&name, &symbol_type_tree)
+                        .add_dynamic_symbol_notification(&symbol, &symbol_type_tree)
                         .map_err(|error| {
                             println!(
                                 "PLC client error when getting information for symbol {}: {}",
-                                name, error
+                                symbol, error
                             );
 
                             connection.handle_disconnect_error(&error);
@@ -167,13 +296,13 @@ impl Plc {
     }
 
     /// Subscribes to the given symbol using the symbol type tree and sends deserialised flattened map data back with the sender channel.
-    /// The key to the map is the path of the symbol relative to the named symbol provided.
+    /// The key to the map is the path of the symbol relative to the symbold symbol provided.
     ///
     /// Returns None if the PLC is not connected.
     /// Returns any errors from the PLC.
     pub async fn start_dynamic_symbol_map_receiver(
         &self,
-        name: String,
+        symbol: String,
         symbol_type_tree: SymbolTypeTree,
         sender_channel: broadcast::Sender<SymbolMap>,
     ) -> Result<Option<()>> {
@@ -184,11 +313,11 @@ impl Plc {
             if let Some(client) = connection.client_mut() {
                 notif_handle = Some(
                     client
-                        .add_dynamic_symbol_notification(&name, &symbol_type_tree)
+                        .add_dynamic_symbol_notification(&symbol, &symbol_type_tree)
                         .map_err(|error| {
                             println!(
                                 "PLC client error when getting information for symbol {}: {}",
-                                name, error
+                                symbol, error
                             );
 
                             connection.handle_disconnect_error(&error);
@@ -245,160 +374,5 @@ impl Plc {
             },
         };
         (channel, value)
-    }
-
-    /// Read a symbol from the PLC.
-    ///
-    /// Returns None if the PLC is not connected.
-    pub async fn read_symbol<T: AdsData>(&self, name: &str) -> Result<Option<T>> {
-        let mut connection = self.connection.lock().await;
-
-        if let Some(client) = connection.client_mut() {
-            let value = client.read_symbol(name).map_err(|error| {
-                println!("PLC client error when reading symbol {}: {}", name, error);
-
-                connection.handle_disconnect_error(&error);
-
-                error
-            })?;
-
-            return Ok(Some(value));
-        }
-
-        Ok(None)
-    }
-
-    /// Calls an RPC method on the PLC that returns a value.
-    ///
-    /// Returns None if the PLC is not connected.
-    pub async fn fetch_from_rpc_method<T: AdsData>(&self, name: &str) -> Result<Option<T>> {
-        let mut connection = self.connection.lock().await;
-
-        if let Some(client) = connection.client_mut() {
-            let value = client.fetch_from_rpc_method(name).map_err(|error| {
-                eprintln!(
-                    "PLC client error when invoking RPC method {}: {}",
-                    name, error
-                );
-
-                connection.handle_disconnect_error(&error);
-
-                error
-            })?;
-
-            return Ok(Some(value));
-        }
-
-        Ok(None)
-    }
-
-    /// Calls an RPC method on the PLC.
-    ///
-    /// Returns None if the PLC is not connected.
-    pub async fn invoke_rpc_method(&self, name: &str) -> Result<Option<()>> {
-        let mut connection = self.connection.lock().await;
-
-        if let Some(client) = connection.client_mut() {
-            client.invoke_rpc_method(name).map_err(|error| {
-                eprintln!(
-                    "PLC client error when invoking RPC method {}: {}",
-                    name, error
-                );
-
-                connection.handle_disconnect_error(&error);
-
-                error
-            })?;
-
-            return Ok(Some(()));
-        }
-
-        Ok(None)
-    }
-
-    /// Calls an RPC method on the PLC with one parameter.
-    ///
-    /// Returns None if the PLC is not connected.
-    pub fn invoke_rpc_method_with_param<P: AdsData>(
-        &self,
-        name: &str,
-        param: P,
-    ) -> Result<Option<()>> {
-        let mut connection = self.connection.lock().await;
-
-        if let Some(client) = connection.client_mut() {
-            client
-                .invoke_rpc_method_with_param(name, param)
-                .map_err(|error| {
-                    eprintln!(
-                        "PLC client error when invoking RPC method {}: {}",
-                        name, error
-                    );
-
-                    connection.handle_disconnect_error(&error);
-
-                    error
-                })?;
-
-            return Ok(Some(()));
-        }
-
-        Ok(None)
-    }
-
-    /// Calls an RPC method on the PLC with three parameters.
-    ///
-    /// Returns None if the PLC is not connected.
-    pub fn invoke_rpc_method_with_three_params<P1: AdsData, P2: AdsData, P3: AdsData>(
-        &self,
-        name: &str,
-        param_1: P1,
-        param_2: P2,
-        param_3: P3,
-    ) -> Result<Option<()>> {
-        let mut connection = self.connection.lock().await;
-
-        if let Some(client) = connection.client_mut() {
-            client
-                .invoke_rpc_method_with_three_params(name, param_1, param_2, param_3)
-                .map_err(|error| {
-                    eprintln!(
-                        "PLC client error when invoking RPC method {}: {}",
-                        name, error
-                    );
-
-                    connection.handle_disconnect_error(&error);
-
-                    error
-                })?;
-
-            return Ok(Some(()));
-        }
-
-        Ok(None)
-    }
-
-    /// Subscribes to a notification channel on the PLC, returning a handle to the channel.
-    ///
-    /// Returns None if the PLC is not connected.
-    pub async fn subscribe<T: AdsData>(&self, name: &str) -> Result<NotificationSubscription<T>> {
-        let mut connection = self.connection.lock().await;
-
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
-        };
-
-        let subscription = client.subscribe::<T>(name).map_err(|error| {
-            eprintln!(
-                "PLC client error when subscribing to notifications from {}: {}",
-                name, error
-            );
-
-            connection.handle_disconnect_error(&error);
-
-            error
-        })?;
-
-        return Ok(Some(subscription));
     }
 }

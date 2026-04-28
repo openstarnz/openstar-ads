@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 
-use crate::{read_exact, ErrContext, AdsError, Result};
+use crate::{read_exact, AdsError, ErrContext, Result};
 
 // ADS index group constants
 const SYM_UPLOAD: u32 = 0xF00B;
@@ -291,7 +291,7 @@ fn parse_method_infos(ptr: &mut &[u8]) -> Result<Vec<RpcMethod>> {
     for _ in 0..count {
         let entry_len = ptr.read_u32::<LE>().ctx(ctx)? as usize;
         if entry_len < 4 {
-            return Err(Error::Reply(
+            return Err(AdsError::Reply(
                 ctx,
                 "invalid method entry length",
                 entry_len as u32,
@@ -724,7 +724,7 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
             for _ in 0..sub_item_count {
                 let sub_size = ptr.read_u32::<LE>().ctx(ctx)? as usize;
                 if sub_size < 4 {
-                    return Err(Error::Reply(
+                    return Err(AdsError::Reply(
                         ctx,
                         "invalid sub-item entry length",
                         sub_size as u32,
@@ -741,5 +741,5 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
         }
     }
 
-    decode_entry(data, None)?.ok_or(Error::Other("expected top-level type"))
+    decode_entry(data, None)?.ok_or(AdsError::Other("expected top-level type".to_owned()))
 }
