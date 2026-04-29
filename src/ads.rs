@@ -57,6 +57,12 @@ impl<RouterAddr> AdsBuilder<RouterAddr> {
     }
 }
 
+impl<RouterAddr: ToSocketAddrs + Clone> AdsBuilder<RouterAddr> {
+    pub fn build(self) -> Ads<RouterAddr> {
+        Ads::new(self.client_builder, self.set_to_run_mode)
+    }
+}
+
 pub struct Ads<RouterAddr> {
     client_builder: ads::ClientBuilder<RouterAddr>,
     set_to_run_mode: bool,
