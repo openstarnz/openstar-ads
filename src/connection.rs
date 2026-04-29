@@ -1,5 +1,5 @@
 use ads_client as ads;
-use std::time::Duration;
+use tokio::net::ToSocketAddrs;
 
 use crate::{AdsClient, AdsError, Result};
 
@@ -10,14 +10,10 @@ pub enum AdsConnection {
     Disconnected,
 }
 
-
 impl AdsConnection {
-    pub async fn connect(
+    pub async fn connect<RouterAddr: ToSocketAddrs>(
         &mut self,
-        addr: &str,
-        port: u16,
-        timeout: Option<ads::AdsTimeout>,
-        retry_delay: Option<Duration>,
+        client_builder: ads::ClientBuilder<RouterAddr>,
         set_to_run_mode: bool,
     ) -> Result<()> {
         match self {
@@ -25,12 +21,7 @@ impl AdsConnection {
                 println!("Attempted to connect to PLC but it is already connected!")
             }
             AdsConnection::Disconnected => {
-                let mut ads_client_builder =
-                    ads::ClientBuilder::new(addr, port).set_retry_delay(retry_delay);
-                if let Some(timeout) = timeout {
-                    ads_client_builder = ads_client_builder.set_timeout(timeout);
-                }
-                let ads_client = ads_client_builder.build().await?;
+                let ads_client = client_builder.build().await?;
                 let client = AdsClient::new(ads_client);
 
                 if !client.is_run_mode().await? && set_to_run_mode {

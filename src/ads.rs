@@ -1,57 +1,73 @@
-use ads_client as ads;
-use bon::bon;
-use std::{sync::Arc, time::Duration};
-use tokio::sync::Mutex;
+use ads_client::{self as ads, AmsAddr};
+use std::{net::Ipv4Addr, sync::Arc, time::Duration};
+use tokio::{net::ToSocketAddrs, sync::Mutex};
 
 use crate::{
     AdsConnection, AdsData, AdsError, AdsParams, NotificationSubscription, Result, SymbolMap,
     SymbolTree, SymbolTypeTree,
 };
 
-pub struct Ads {
-    addr: String,
-    port: u16,
-    timeout: Option<Timeout>,
-    retry_delay: Option<Duration>,
+pub use ads::AdsTimeout;
+
+pub struct AdsBuilder<RouterAddr> {
+    client_builder: ads::ClientBuilder<RouterAddr>,
     set_to_run_mode: bool,
-    connection: Arc<Mutex<AdsConnection>>,
 }
 
-// Note(mw): We need our own Timeout enum, only because
-//   ads_client::AdsTimeout doesn't implement Clone.
-#[derive(Debug, Clone)]
-pub enum Timeout {
-    /// Default timeout is 5 seconds
-    DefaultTimeout,
-    /// Custom timeout (in seconds)
-    CustomTimeout(u64),
-}
-
-impl From<Timeout> for ads::AdsTimeout {
-    fn from(value: Timeout) -> Self {
-        match value {
-            Timeout::DefaultTimeout => ads::AdsTimeout::DefaultTimeout,
-            Timeout::CustomTimeout(timeout) => ads::AdsTimeout::CustomTimeout(timeout),
+impl AdsBuilder<()> {
+    pub fn new(dst_ams_addr: ads::AmsAddr) -> AdsBuilder<(Ipv4Addr, u16)> {
+        AdsBuilder {
+            client_builder: ads::ClientBuilder::new(dst_ams_addr),
+            set_to_run_mode: Default::default(),
         }
     }
 }
 
+impl<RouterAddr> AdsBuilder<RouterAddr> {
+    pub fn router_addr<NextRouterAddr: ToSocketAddrs>(
+        self,
+        router_addr: NextRouterAddr,
+    ) -> AdsBuilder<NextRouterAddr> {
+        AdsBuilder {
+            client_builder: self.client_builder.router_addr(router_addr),
+            set_to_run_mode: self.set_to_run_mode,
+        }
+    }
+}
+
+impl<RouterAddr> AdsBuilder<RouterAddr> {
+    pub fn src_ams_addr(mut self, src_ams_addr: AmsAddr) -> Self {
+        self.client_builder = self.client_builder.src_ams_addr(src_ams_addr);
+        self
+    }
+
+    pub fn timeout(mut self, timeout: AdsTimeout) -> Self {
+        self.client_builder = self.client_builder.timeout(timeout);
+        self
+    }
+
+    pub fn retry_delay(mut self, retry_delay: Option<Duration>) -> Self {
+        self.client_builder = self.client_builder.retry_delay(retry_delay);
+        self
+    }
+
+    pub fn set_to_run_mode(mut self, set_to_run_mode: bool) -> Self {
+        self.set_to_run_mode = set_to_run_mode;
+        self
+    }
+}
+
+pub struct Ads<RouterAddr> {
+    client_builder: ads::ClientBuilder<RouterAddr>,
+    set_to_run_mode: bool,
+    connection: Arc<Mutex<AdsConnection>>,
+}
+
 /// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
-#[bon]
-impl Ads {
-    #[builder]
-    pub fn new(
-        addr: String,
-        port: u16,
-        timeout: Option<Timeout>,
-        retry_delay: Option<Duration>,
-        set_to_run_mode: bool,
-    ) -> Self {
+impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
+    pub fn new(client_builder: ads::ClientBuilder<RouterAddr>, set_to_run_mode: bool) -> Self {
         Self {
-            addr,
-            port,
-            timeout,
-            retry_delay,
+            client_builder,
             set_to_run_mode,
             connection: Default::default(),
         }
@@ -63,13 +79,7 @@ impl Ads {
             if !self.is_connected().await {
                 let mut connection = self.connection.lock().await;
                 if let Err(error) = connection
-                    .connect(
-                        &self.addr,
-                        self.port,
-                        self.timeout.clone().map(Into::into),
-                        self.retry_delay,
-                        self.set_to_run_mode,
-                    )
+                    .connect(self.client_builder.clone(), self.set_to_run_mode)
                     .await
                 {
                     println!("PLC connection failed, {}. Retrying in 2 seconds...", error);
