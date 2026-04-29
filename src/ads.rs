@@ -1,4 +1,4 @@
-use ads_client::{self as ads, AmsAddr};
+use ads_client::{self as ads};
 use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{net::ToSocketAddrs, sync::Mutex};
 
@@ -7,7 +7,7 @@ use crate::{
     SymbolTree, SymbolTypeTree,
 };
 
-pub use ads::AdsTimeout;
+pub use ads::{AdsTimeout, AmsAddr, AmsNetId, AmsPort};
 
 pub struct AdsBuilder<RouterAddr> {
     client_builder: ads::ClientBuilder<RouterAddr>,
