@@ -91,6 +91,8 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                     println!("PLC connection failed, {}. Retrying in 2 seconds...", error);
                 } else {
                     println!("PLC connection successful!");
+
+                    return;
                 }
             }
 
