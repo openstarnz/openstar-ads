@@ -9,6 +9,7 @@ mod params;
 mod symbol;
 
 pub use self::ads::*;
+pub use self::client::NotificationSubscription;
 pub(crate) use self::client::*;
 pub(crate) use self::connection::*;
 pub use self::data_types::*;
