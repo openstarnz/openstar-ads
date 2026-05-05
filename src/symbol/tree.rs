@@ -139,8 +139,8 @@ impl SymbolTree {
                 // TODO: Use actual extended value and figure out serde for that.
                 Self::Real80(extended::Extended::from_le_bytes(buffer).to_f64())
             }
-            SymbolTypeTree::Bool => match u8::read_from(accessible_data) {
-                Some(num) => Self::Bool(num != 1),
+            SymbolTypeTree::Bool => match u8::read_from_prefix(accessible_data) {
+                Some(num) => Self::Bool(num != 0),
                 None => Self::Malformed,
             },
             SymbolTypeTree::Compound(_) => Self::Malformed,
