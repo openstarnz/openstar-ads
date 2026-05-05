@@ -1,6 +1,6 @@
 use ads_client::{self as ads};
 use std::{net::Ipv4Addr, sync::Arc, time::Duration};
-use tokio::{net::ToSocketAddrs, sync::Mutex};
+use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
 
 use crate::{
     AdsConnection, AdsData, AdsError, AdsParams, NotificationSubscription, Result, SymbolMap,
@@ -96,7 +96,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                 }
             }
 
-            std::thread::sleep(Duration::from_secs(2));
+            sleep(Duration::from_secs(2)).await;
         }
     }
 
