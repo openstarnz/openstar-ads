@@ -1,3 +1,11 @@
+use std::str::FromStr;
+use zerocopy::{
+    FromBytes, FromZeros, Immutable, IntoBytes,
+    little_endian::{U16, U32},
+};
+
+use crate::{AmsNetId, Result, errors::ads_error, notif};
+
 /// Size of the AMS/TCP + AMS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086
 pub(crate) const AMS_TCP_HEADER_SIZE: usize = 6;
@@ -32,7 +40,7 @@ pub enum Command {
 }
 
 impl Command {
-    fn action(self) -> &'static str {
+    pub fn action(self) -> &'static str {
         match self {
             Command::DevInfo => "get device info",
             Command::Read => "read data",
@@ -415,7 +423,7 @@ impl DelNotifRequest {
 fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
     // Calculate the initial (using buffer sizes) and actual (using result
     // sizes) offsets of each request.
-    let offsets = requests
+    let offsets: Vec<_> = requests
         .iter()
         .scan((0, 0), |(init_cum, act_cum), req| {
             let (init, act) = (req.rbuf.len(), req.res.length.get() as usize);
@@ -425,7 +433,7 @@ fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
             *act_cum += act;
             current
         })
-        .collect_vec();
+        .collect();
 
     // Go through the buffers in reverse order.
     for i in (0..requests.len()).rev() {

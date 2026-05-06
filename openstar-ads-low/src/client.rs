@@ -1,13 +1,17 @@
 use std::{
     collections::BTreeMap,
     net::{Ipv4Addr, Shutdown},
-    sync::{Arc, atomic::AtomicU32},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
-use byteorder::LE;
+use byteorder::{ByteOrder, LE};
 use bytes::{Bytes, BytesMut};
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{
         TcpStream, ToSocketAddrs,
         tcp::{OwnedReadHalf, OwnedWriteHalf},
@@ -15,48 +19,54 @@ use tokio::{
     sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
 };
+use zerocopy::{
+    FromBytes, IntoBytes,
+    little_endian::{U16, U32},
+};
 
 use crate::{
-    AmsAddr, AmsNetId, Error, Result, notif,
+    AmsAddr, AmsNetId, Error, Result,
+    errors::{ErrContext, ads_error},
+    notif,
     protocol::{ADS_HEADER_SIZE, AMS_HEADER_SIZE, AdsHeader, Command},
 };
 
 #[derive(Debug, Clone)]
 pub struct ClientBuilder<RouterAddr> {
-    router_addr: RouterAddr,
-    dst_ams_addr: AmsAddr,
-    src_ams_addr: Option<AmsAddr>,
+    router: RouterAddr,
+    target: AmsAddr,
+    source: Option<AmsAddr>,
     timeouts: Timeouts,
 }
 
 impl ClientBuilder<()> {
-    pub fn new(dst_ams_addr: AmsAddr) -> ClientBuilder<(Ipv4Addr, u16)> {
+    pub fn new(target: AmsAddr) -> ClientBuilder<(Ipv4Addr, u16)> {
         ClientBuilder {
-            router_addr: (Ipv4Addr::new(127, 0, 0, 1), 48898),
-            dst_ams_addr,
-            src_ams_addr: Default::default(),
+            router: (Ipv4Addr::new(127, 0, 0, 1), 48898),
+            target,
+            source: Default::default(),
             timeouts: Default::default(),
         }
     }
 }
 
 impl<RouterAddr> ClientBuilder<RouterAddr> {
-    pub fn router_addr<NextRouterAddr: ToSocketAddrs>(
+    pub fn router<NextRouterAddr: ToSocketAddrs>(
         self,
-        router_addr: NextRouterAddr,
+        router: NextRouterAddr,
     ) -> ClientBuilder<NextRouterAddr> {
         ClientBuilder {
-            router_addr,
-            dst_ams_addr: self.dst_ams_addr,
-            src_ams_addr: self.src_ams_addr,
+            router,
+            target: self.target,
+            source: self.source,
             timeouts: self.timeouts,
         }
     }
 }
 
 impl<RouterAddr> ClientBuilder<RouterAddr> {
-    pub fn src_ams_addr(mut self, src_ams_addr: AmsAddr) -> Self {
-        self.src_ams_addr = Some(src_ams_addr);
+    pub fn source(mut self, source: AmsAddr) -> Self {
+        self.source = Some(source);
         self
     }
 
@@ -68,13 +78,7 @@ impl<RouterAddr> ClientBuilder<RouterAddr> {
 
 impl<RouterAddr: ToSocketAddrs> ClientBuilder<RouterAddr> {
     pub async fn build(self) -> Result<Client> {
-        Client::new(
-            self.router_addr,
-            self.dst_ams_addr,
-            self.src_ams_addr,
-            self.timeouts,
-        )
-        .await
+        Client::new(self.router, self.target, self.source, self.timeouts).await
     }
 }
 
@@ -119,23 +123,30 @@ type NotificationSubscribers = Arc<Mutex<BTreeMap<u32, mpsc::Sender<Bytes>>>>;
 /// shared within one thread, or sent, between threads.
 #[derive(Debug)]
 pub struct Client {
+    /// The AMS address of the source
+    source: AmsAddr,
+    /// The AMS address of the target
+    target: AmsAddr,
+    /// The timeouts used by the client
+    timeouts: Timeouts,
+
+    /// If we opened our local port with the router
+    source_port_opened: bool,
+
     /// TCP connection (duplicated with the reader)
-    socket_writer: OwnedWriteHalf,
+    socket_writer: Mutex<OwnedWriteHalf>,
+
     /// Current invoke ID (identifies the request/reply pair), incremented
     /// after each request
     invoke_id: AtomicU32,
-    /// Read timeout (actually receive timeout for the channel)
-    read_timeout: Option<Duration>,
-    /// The AMS address of the client
-    source: AmsAddr,
+
     /// Active requests
     commands: PendingCommands,
     /// Subscriptions to notifications
     subscribers: NotificationSubscribers,
+
     /// IO receiver
     receiver: ClientReceiver,
-    /// If we opened our local port with the router
-    source_port_opened: bool,
 }
 
 impl Drop for Client {
@@ -156,49 +167,40 @@ impl Client {
     /// crate's `udp::add_route` helper can be used to add a route via UDP
     /// message.
     ///
-    /// `src_ams_addr` is the AMS address to to use as the source; the NetID needs to
+    /// `source` is the AMS address to to use as the source; the NetID needs to
     /// match the route entry in the server.  If `None`, the NetID is
     /// constructed from the local IP address with .1.1 appended; if there is no
     /// IPv4 address, `127.0.0.1.1.1` is used.
     ///
     /// The AMS port of `source` is not important, as long as it is not a
     /// well-known service port; an ephemeral port number > 49152 is
-    /// recommended. The default port is set to 58913.
+    /// recommended.
     ///
     /// Since all communications is supposed to be handled by an ADS router,
     /// only one TCP/ADS connection can exist between two hosts. Non-TwinCAT
     /// clients should make sure to replicate this behavior, as opening a second
     /// connection will close the first.
-    pub async fn connect(
+    pub async fn new(
         router_addr: impl ToSocketAddrs,
-        dst_ams_addr: AmsAddr,
-        src_ams_addr: Option<AmsAddr>,
+        target: AmsAddr,
+        source: Option<AmsAddr>,
         timeouts: Timeouts,
     ) -> Result<Self> {
         let mut socket = if let Some(timeout) = timeouts.connect {
             tokio::time::timeout(timeout, TcpStream::connect(router_addr))
                 .await
-                .ctx("establishing connetion to remote ADS router (with timeout)")??
+                .ctx("establishing connection to remote ADS router (with timeout)")?
         } else {
-            TcpStream::connect(router_addr).ctx("establishing connection to remote ADS router")?
+            TcpStream::connect(router_addr)
+                .await
+                .ctx("establishing connection to remote ADS router")?
         };
-
-        let (socket_reader, socket_writer) = socket.into_split();
 
         // Disable Nagle to ensure small requests are sent promptly; we're
         // playing ping-pong with request reply, so no pipelining.
         socket
             .set_nodelay(true)
-            .await
             .ctx("setting client socket NODELAY")?;
-        socket
-            .set_write_timeout(timeouts.write)
-            .await
-            .ctx("setting client socket write timeout")?;
-        socket
-            .set_read_timeout(timeouts.read)
-            .await
-            .ctx("setting client socket read timeout")?;
 
         // Determine our source AMS address.  If it's not specified, try to use
         // the socket's local IPv4 address, if it's IPv6 (not sure if Beckhoff
@@ -208,19 +210,33 @@ impl Client {
         // router to get our source address.  This is required when connecting
         // via localhost, apparently.
         let mut source_port_opened = false;
-        let source = match src_ams_addr {
+        let source = match source {
             Some(addr) => addr,
             None => {
                 let request_port_msg = [0, 16, 2, 0, 0, 0, 0, 0];
                 let mut reply = [0; 14];
-                socket
-                    .write_all(&request_port_msg)
-                    .ctx("requesting port from router")
-                    .await?;
-                socket
-                    .read_exact(&mut reply)
-                    .ctx("requesting port from router")
-                    .await?;
+                if let Some(timeout) = timeouts.write {
+                    tokio::time::timeout(timeout, socket.write_all(&request_port_msg))
+                        .await
+                        .ctx("requesting port from router (with timeout)")?;
+                } else {
+                    socket
+                        .write_all(&request_port_msg)
+                        .await
+                        .ctx("requesting port from router")?;
+                }
+
+                if let Some(timeout) = timeouts.read {
+                    tokio::time::timeout(timeout, socket.read(&mut reply))
+                        .await
+                        .ctx("requesting port from router (with timeout)")?;
+                } else {
+                    socket
+                        .write_all(&mut reply)
+                        .await
+                        .ctx("requesting port from router")?;
+                }
+
                 if reply[..6] != [0, 16, 8, 0, 0, 0] {
                     return Err(Error::Reply(
                         "requesting port",
@@ -236,24 +252,238 @@ impl Client {
             }
         };
 
+        let (socket_reader, socket_writer) = socket.into_split();
+
         let commands = Arc::new(Mutex::new(BTreeMap::new()));
         let subscribers = Arc::new(Mutex::new(BTreeMap::new()));
 
         // Start the reader thread.
         let mut receiver = ClientReceiver::default();
 
-        receiver.start(socket_reader, source, commands, subscribers);
+        receiver.start(socket_reader, source, commands.clone(), subscribers.clone());
 
         Ok(Client {
-            socket_writer,
-            invoke_id: AtomicU32::new(1),
-            read_timeout: timeouts.read,
             source,
+            target,
+            timeouts,
+            source_port_opened,
+            socket_writer: Mutex::new(socket_writer),
+            invoke_id: AtomicU32::new(1),
             commands,
             subscribers,
             receiver,
-            source_port_opened,
         })
+    }
+
+    /// Low-level function to execute an ADS command.
+    ///
+    /// Writes a data from a number of input buffers, and returns data in a
+    /// number of output buffers.  The latter might not be filled completely;
+    /// the return value specifies the number of total valid bytes.  It is up to
+    /// the caller to determine what this means in terms of the passed buffers.
+    pub async fn communicate(
+        &self,
+        cmd: Command,
+        target: AmsAddr,
+        payload_bufs: &[&[u8]],
+        result_bufs: &mut [&mut [u8]],
+    ) -> Result<usize> {
+        // Increase the invoke ID.  We could also generate a random u32, but
+        // this way the sequence of packets can be tracked.
+        let dispatched_invoke_id = self.invoke_id.fetch_add(1, Ordering::Relaxed);
+
+        // The data we send is the sum of all data_in buffers.
+        let payload_len = payload_bufs.iter().map(|v| v.len()).sum::<usize>();
+
+        // Create outgoing header.
+        let ads_data_len = AMS_HEADER_SIZE + payload_len;
+        let header = AdsHeader {
+            ams_cmd: 0, // send command
+            length: U32::new(ads_data_len.try_into()?),
+            dest_netid: target.netid(),
+            dest_port: U16::new(target.port()),
+            src_netid: self.source.netid(),
+            src_port: U16::new(self.source.port()),
+            command: U16::new(cmd as u16),
+            state_flags: U16::new(4), // state flags (4 = send command)
+            data_length: U32::new(payload_len as u32), // overflow checked above
+            error_code: U32::new(0),
+            invoke_id: U32::new(dispatched_invoke_id),
+        };
+
+        let mut request_buf = Vec::with_capacity(header.length.get() as usize + payload_len);
+
+        request_buf.extend_from_slice(header.as_bytes());
+
+        // Collect the outgoing data.  Note, allocating a Vec and calling
+        // `socket.write_all` only once is faster than writing in multiple
+        // steps, even with TCP_NODELAY.
+        for buf in payload_bufs.iter() {
+            request_buf.extend_from_slice(buf);
+        }
+
+        let (resp_tx, resp_rx) = oneshot::channel::<Result<(AdsHeader, Bytes)>>();
+
+        self.insert_pending_command(dispatched_invoke_id, resp_tx);
+
+        {
+            let mut writer = self.socket_writer.lock().await;
+
+            if let Some(timeout) = self.timeouts.write {
+                tokio::time::timeout(timeout, writer.write_all(&request_buf))
+                    .await
+                    .ctx("dispatching assembled command payload (with timeout)")?
+            } else {
+                writer
+                    .write_all(&request_buf)
+                    .await
+                    .ctx("dispatching assembled command payload")?;
+            }
+        }
+
+        let (resp_header, resp_buf) = match self.timeouts.read {
+            Some(timeout) => match tokio::time::timeout(timeout, resp_rx).await {
+                Ok(Ok(Ok((header, payload)))) => (header, payload),
+
+                Ok(Ok(Err(e))) => {
+                    self.discard_pending_command(&dispatched_invoke_id);
+                    return Err(e);
+                }
+
+                Ok(Err(_recv_error)) => {
+                    self.discard_pending_command(&dispatched_invoke_id);
+                    return Err(Error::IoSync(
+                        "waiting for response to dispatched request",
+                        "response channel was closed",
+                        dispatched_invoke_id,
+                    ));
+                }
+
+                Err(_elapsed) => {
+                    self.discard_pending_command(&dispatched_invoke_id);
+                    return Err(Error::Io(
+                        "waiting for response to dispatched request",
+                        std::io::ErrorKind::TimedOut.into(),
+                    ));
+                }
+            },
+
+            None => match resp_rx.await {
+                Ok(Ok((header, payload))) => (header, payload),
+
+                Ok(Err(e)) => {
+                    self.discard_pending_command(&dispatched_invoke_id);
+                    return Err(e);
+                }
+
+                Err(_) => {
+                    self.discard_pending_command(&dispatched_invoke_id);
+                    return Err(Error::IoSync(
+                        "waiting for response to dispatched request",
+                        "response channel was closed",
+                        dispatched_invoke_id,
+                    ));
+                }
+            },
+        };
+
+        // Validate the incoming reply. The reader thread already made sure that
+        // it is consistent and addressed to us.
+
+        // The source netid/port must match what we sent.
+        if (resp_header.src_netid, resp_header.src_port.get()) != (target.netid(), target.port()) {
+            return Err(Error::Reply(
+                cmd.action(),
+                "response wasn't from commanded target",
+                0,
+            ));
+        }
+
+        // Command must match.
+        if resp_header.command != cmd as u16 {
+            return Err(Error::Reply(
+                cmd.action(),
+                "unexpected command",
+                resp_header.command.into(),
+            ));
+        }
+
+        // State flags must be "4 | 1".
+        if resp_header.state_flags != 5 {
+            return Err(Error::Reply(
+                cmd.action(),
+                "unexpected state flags",
+                resp_header.state_flags.into(),
+            ));
+        }
+
+        // Invoke ID must match what we sent.
+        if resp_header.invoke_id != dispatched_invoke_id {
+            return Err(Error::Reply(
+                cmd.action(),
+                "unexpected invoke ID",
+                resp_header.invoke_id.get(),
+            ));
+        }
+
+        // Check error code in AMS header.
+        if resp_header.error_code != 0 {
+            return ads_error(cmd.action(), resp_header.error_code.get());
+        }
+
+        let result = LE::read_u32(&resp_buf[..4]);
+
+        // Check result field in payload, only relevant if error_code == 0.
+        if result != 0 {
+            return ads_error(cmd.action(), result);
+        }
+
+        // If we don't want return data, we're done.
+        if result_bufs.is_empty() {
+            return Ok(0);
+        }
+
+        // Check returned length, it needs to fill at least the first data_out
+        // buffer. This also ensures that we had a result field.
+        if resp_buf.len() < result_bufs[0].len() + 4 {
+            return Err(Error::Reply(
+                cmd.action(),
+                "got less data than expected",
+                resp_buf.len() as u32,
+            ));
+        }
+
+        let resp_buf = &resp_buf[4..];
+
+        // Distribute the data into the user output buffers, up to the returned
+        // data length.
+        let mut taken = 0;
+        let mut rest_len = resp_buf.len();
+        for buf in result_bufs {
+            let n = buf.len().min(rest_len);
+            let b = &resp_buf[taken..][..n];
+            buf[..n].copy_from_slice(b);
+            taken += n;
+            rest_len -= n;
+            if rest_len == 0 {
+                break;
+            }
+        }
+
+        // Return either the error or the length of data.
+        Ok(resp_buf.len())
+    }
+
+    async fn insert_pending_command(
+        &self,
+        id: u32,
+        tx: oneshot::Sender<Result<(AdsHeader, Bytes)>>,
+    ) {
+        self.commands.lock().await.insert(id, tx);
+    }
+
+    async fn discard_pending_command(&self, id: &u32) {
+        self.commands.lock().await.remove_entry(id);
     }
 }
 
@@ -273,15 +503,11 @@ impl ClientReceiver {
         subscribers: NotificationSubscribers,
     ) {
         let rx_worker = tokio::spawn(async move {
-            let result = Self::reader_work(
-                socket.as_mut(),
-                source,
-                commands.clone(),
-                subscribers.clone(),
-            )
-            .await;
+            let result =
+                Self::reader_work(&mut socket, source, commands.clone(), subscribers.clone()).await;
 
-            let _ = socket.shutdown(Shutdown::Both);
+            // TODO
+            // let _ = socket.shutdown(Shutdown::Both);
 
             if let Ok(ref mut commands) = commands.lock() {
                 let keys = commands.keys().cloned().collect_vec();
@@ -313,7 +539,7 @@ impl ClientReceiver {
     }
 
     async fn reader_work(
-        socket_rx: &mut TcpStream,
+        socket_rx: &mut OwnedReadHalf,
         source: AmsAddr,
         commands: PendingCommands,
         subscribers: NotificationSubscribers,
@@ -321,8 +547,10 @@ impl ClientReceiver {
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
+            // TODO timeout
             socket_rx
                 .read_exact(&mut ads_header_buf[..6])
+                .await
                 .ctx("receiving AMS/TCP header")?;
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
@@ -331,16 +559,20 @@ impl ClientReceiver {
                 0..=31 => {
                     let mut discard = [0u8; 31];
 
+                    // TODO timeout
                     socket_rx
                         .read_exact(&mut discard[..packet_len as usize])
+                        .await
                         .ctx("discarding bad data")?;
 
                     continue;
                 }
 
                 _ => {
+                    // TODO timeout
                     socket_rx
                         .read_exact(&mut ads_header_buf[6..])
+                        .await
                         .ctx("receiving AMS header")?;
 
                     AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
@@ -353,8 +585,10 @@ impl ClientReceiver {
 
             let mut payload_buf = BytesMut::zeroed(payload_len as usize);
 
+            // TODO timeout
             socket_rx
                 .read_exact(&mut payload_buf)
+                .await
                 .ctx("receiving Ads data payload")?;
 
             // Reserved bytes should be well-known
@@ -428,7 +662,7 @@ impl ClientReceiver {
                     let subscribers = subscribers.lock().await;
                     for sample in notif.samples() {
                         if let Some(subscriber) = subscribers.get(&sample.handle) {
-                            subscriber.send(sample.data.into());
+                            subscriber.send(Bytes::copy_from_slice(sample.data));
                         }
                     }
                 }

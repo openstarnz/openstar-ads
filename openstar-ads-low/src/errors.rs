@@ -1,5 +1,9 @@
 //! Defines ADS error types.
 
+use std::io;
+
+use tokio::time::error::Elapsed;
+
 /// Result alias for `ads::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -54,6 +58,14 @@ impl<T> ErrContext for std::result::Result<T, std::io::Error> {
     type Success = T;
     fn ctx(self, context: &'static str) -> Result<Self::Success> {
         self.map_err(|e| Error::Io(context, e))
+    }
+}
+
+impl<T> ErrContext for std::result::Result<std::result::Result<T, std::io::Error>, Elapsed> {
+    type Success = T;
+    fn ctx(self, context: &'static str) -> Result<Self::Success> {
+        let v = self.map_err(|e| Error::Io(context, io::Error::new(io::ErrorKind::TimedOut, e)))?;
+        v.ctx(context)
     }
 }
 
