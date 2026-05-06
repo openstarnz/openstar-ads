@@ -1,5 +1,6 @@
 use ads_client as ads;
 use tokio::net::ToSocketAddrs;
+use tracing::{error, info, warn};
 
 use crate::{AdsClient, AdsError, Result};
 
@@ -18,7 +19,7 @@ impl AdsConnection {
     ) -> Result<()> {
         match self {
             AdsConnection::Connected(_) => {
-                println!("Attempted to connect to PLC but it is already connected!")
+                info!("Attempted to connect to PLC but it is already connected!")
             }
             AdsConnection::Disconnected => {
                 let ads_client = client_builder.build().await?;
@@ -45,12 +46,12 @@ impl AdsConnection {
         match self {
             AdsConnection::Connected(plc_client) => {
                 if let Err(error) = plc_client.unsubscribe_all().await {
-                    println!("Error unsubscribing on disconnect: {error}")
+                    error!("Error unsubscribing on disconnect: {error}")
                 };
 
                 *self = AdsConnection::Disconnected;
 
-                println!("PLC connection was dropped.");
+                info!("PLC connection was dropped.");
             }
             AdsConnection::Disconnected => {
                 // Already disconnected...
@@ -87,7 +88,7 @@ impl AdsConnection {
         );
 
         if should_disconnect {
-            println!("PLC client error indicates we should disconnect...");
+            warn!("PLC client error indicates we should disconnect...");
 
             self.disconnect().await?;
         }

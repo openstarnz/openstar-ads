@@ -8,6 +8,7 @@ use std::{
     },
 };
 use tokio::sync::mpsc;
+use tracing::{error, info};
 
 use crate::{
     get_symbol_info, AdsData, AdsError, AdsParams, Result, SymbolMap, SymbolMapExt, SymbolTree,
@@ -123,13 +124,13 @@ impl AdsClient {
     /// Attempts to set the ADS device into run mode if it is not already in it.
     pub async fn set_to_run_mode(&self) -> Result<()> {
         let device_info = self.ads_client.read_device_info().await?;
-        println!("Device Info: {:?}", device_info);
+        info!("Device Info: {:?}", device_info);
 
         let state_info = self.ads_client.read_state().await?;
-        println!("Device State: {:?}", state_info);
+        info!("Device State: {:?}", state_info);
 
         if state_info.ads_state != ads::AdsState::Run {
-            println!("Attempting to set PLC to run mode...");
+            info!("Attempting to set PLC to run mode...");
 
             let next_state_info = StateInfo {
                 ads_state: ads::AdsState::Run,
@@ -140,7 +141,7 @@ impl AdsClient {
                 .await?;
 
             let state_info = self.ads_client.read_state().await?;
-            println!("Device State: {:?}", state_info);
+            info!("Device State: {:?}", state_info);
             assert_eq!(state_info.ads_state, ads::AdsState::Run);
         }
 
@@ -183,7 +184,7 @@ impl AdsClient {
         let symbol_type_tree = match SymbolTypeTree::from_symbol(&symbol, &type_map) {
             Ok(symbol_type_tree) => symbol_type_tree,
             Err(err) => {
-                println!("Error when getting symbol type from type map {err:?}");
+                error!("Error when getting symbol type from type map {err:?}");
                 SymbolTypeTree::Unknown(symbol.size)
             }
         };

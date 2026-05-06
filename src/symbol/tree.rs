@@ -3,6 +3,7 @@ use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
+use tracing::warn;
 use zerocopy::FromBytes;
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,7 +38,7 @@ impl SymbolTree {
         parent_offset: usize,
     ) -> Self {
         if parent_offset > data.len() {
-            println!(
+            warn!(
                 "Offset of {parent_offset} greater than data length of {}.",
                 data.len()
             );

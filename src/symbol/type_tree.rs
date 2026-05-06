@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use std::{collections::HashMap, fmt::Debug};
+use tracing::warn;
 
 use crate::{Field, Symbol, Type};
 
@@ -94,7 +95,7 @@ impl SymbolTypeTree {
             33 => Self::Bool,
             65 => Self::Compound(size),
             t => {
-                println!("Found unknown type number {t}.");
+                warn!("Found unknown type number {t}.");
                 Self::Unknown(size)
             }
         }
@@ -129,9 +130,7 @@ impl SymbolTypeTree {
                 tree = SymbolTypeTree::Struct(struct_map, tree_type.size);
             } else {
                 tree = SymbolTypeTree::Array(Box::new(SymbolTypeTree::Usint), size);
-                println!(
-                    "Warn: Dynamic symbol deserialisation is unsupported for arrays, converting to"
-                );
+                warn!("Dynamic symbol deserialisation is unsupported for arrays, converting to");
             }
         }
 

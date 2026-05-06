@@ -1,6 +1,7 @@
 use ads_client::{self as ads};
 use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
+use tracing::{error, info, warn};
 
 use crate::{
     AdsConnection, AdsData, AdsError, AdsParams, NotificationSubscription, Result, SymbolMap,
@@ -88,9 +89,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                     .connect(self.client_builder.clone(), self.set_to_run_mode)
                     .await
                 {
-                    println!("PLC connection failed, {}. Retrying in 2 seconds...", error);
+                    warn!("PLC connection failed, {}. Retrying in 2 seconds...", error);
                 } else {
-                    println!("PLC connection successful!");
+                    info!("PLC connection successful!");
 
                     return;
                 }
@@ -128,7 +129,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         match client.read_symbol(symbol).await {
             Ok(value) => Ok(Some(value)),
             Err(error) => {
-                println!("PLC client error when reading symbol {}: {}", symbol, error);
+                error!("PLC client error when reading symbol {}: {}", symbol, error);
 
                 connection.handle_disconnect_error(&error).await?;
 
@@ -151,7 +152,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         match client.get_dynamic_type_tree(symbol).await {
             Ok(type_tree) => Ok(Some(type_tree)),
             Err(error) => {
-                println!(
+                error!(
                     "ADS client error when getting information for symbol {}: {}",
                     symbol, error
                 );
@@ -183,7 +184,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         };
 
         if let Err(error) = client.invoke_rpc_method(symbol, params).await {
-            eprintln!(
+            error!(
                 "PLC client error when invoking RPC method {}: {}",
                 symbol, error
             );
@@ -213,7 +214,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         match client.fetch_from_rpc_method(symbol, params).await {
             Ok(value) => Ok(Some(value)),
             Err(error) => {
-                eprintln!(
+                error!(
                     "PLC client error when invoking RPC method {}: {}",
                     symbol, error
                 );
@@ -241,7 +242,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         match client.subscribe(symbol).await {
             Ok(subscription) => Ok(Some(subscription)),
             Err(error) => {
-                eprintln!(
+                error!(
                     "PLC client error when subscribing to notifications from {}: {}",
                     symbol, error
                 );
@@ -271,7 +272,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         match client.subscribe_tree(symbol, symbol_type_tree).await {
             Ok(subscription) => Ok(Some(subscription)),
             Err(error) => {
-                eprintln!(
+                error!(
                     "PLC client error when subscribing to notifications from {}: {}",
                     symbol, error
                 );
@@ -302,7 +303,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         match client.subscribe_map(symbol, symbol_type_tree).await {
             Ok(subscription) => Ok(Some(subscription)),
             Err(error) => {
-                eprintln!(
+                error!(
                     "PLC client error when subscribing to notifications from {}: {}",
                     symbol, error
                 );
