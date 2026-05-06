@@ -44,7 +44,9 @@ impl AdsConnection {
     pub async fn disconnect(&mut self) -> Result<()> {
         match self {
             AdsConnection::Connected(plc_client) => {
-                plc_client.unsubscribe_all().await?;
+                if let Err(error) = plc_client.unsubscribe_all().await {
+                    println!("Error unsubscribing on disconnect: {error}")
+                };
 
                 *self = AdsConnection::Disconnected;
 
