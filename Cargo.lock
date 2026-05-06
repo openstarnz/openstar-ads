@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "ads_client"
 version = "2.0.1"
-source = "git+https://github.com/mikey-openstar/ads_client?branch=dev#e3006414461b93ebe02feda91aa673ebb1b76404"
+source = "git+https://github.com/mikey-openstar/ads_client?branch=dev#ecd4b680be40efe16b5093e7bbf2604da2d448e7"
 dependencies = [
  "bytes",
  "log",
