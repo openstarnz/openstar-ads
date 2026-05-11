@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use std::str::FromStr;
 use zerocopy::{
     FromBytes, FromZeros, Immutable, IntoBytes,
@@ -423,7 +424,7 @@ impl DelNotifRequest {
 fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
     // Calculate the initial (using buffer sizes) and actual (using result
     // sizes) offsets of each request.
-    let offsets: Vec<_> = requests
+    let offsets = requests
         .iter()
         .scan((0, 0), |(init_cum, act_cum), req| {
             let (init, act) = (req.rbuf.len(), req.res.length.get() as usize);
@@ -433,7 +434,7 @@ fn fixup_write_read_return_buffers(requests: &mut [WriteReadRequest]) {
             *act_cum += act;
             current
         })
-        .collect();
+        .collect_vec();
 
     // Go through the buffers in reverse order.
     for i in (0..requests.len()).rev() {

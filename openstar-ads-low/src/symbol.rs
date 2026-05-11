@@ -7,9 +7,9 @@ use std::io::Read;
 use byteorder::{ByteOrder, LE, ReadBytesExt};
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
+use crate::Result;
 use crate::errors::{ErrContext, Error};
 use crate::index;
-use crate::{Device, Result};
 
 /// A handle to a variable within the ADS device.
 ///

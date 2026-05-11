@@ -10,6 +10,7 @@ use std::{
 
 use byteorder::{ByteOrder, LE};
 use bytes::{Bytes, BytesMut};
+use itertools::Itertools;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -20,15 +21,18 @@ use tokio::{
     task::JoinHandle,
 };
 use zerocopy::{
-    FromBytes, IntoBytes,
+    FromBytes, FromZeros, Immutable, IntoBytes,
     little_endian::{U16, U32},
 };
 
 use crate::{
-    AmsAddr, AmsNetId, Error, Result,
+    AdsState, AmsAddr, AmsNetId, Error, Result,
     errors::{ErrContext, ads_error},
     notif,
-    protocol::{ADS_HEADER_SIZE, AMS_HEADER_SIZE, AdsHeader, Command},
+    protocol::{
+        ADS_HEADER_SIZE, AMS_HEADER_SIZE, AdsHeader, Command, IndexLength, IndexLengthRW,
+        ReadState, WriteControl,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -275,6 +279,167 @@ impl Client {
         })
     }
 
+    /// Read some data at a given index group/offset.  Returned data can be shorter than
+    /// the buffer, the length is the return value.
+    pub async fn read(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+        data: &mut [u8],
+    ) -> Result<usize> {
+        let header = IndexLength {
+            index_group: U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            length: U32::new(data.len().try_into()?),
+        };
+
+        let mut read_len = U32::new(0);
+
+        self.communicate(
+            Command::Read,
+            &[header.as_bytes()],
+            &mut [read_len.as_mut_bytes(), data],
+        )
+        .await?;
+
+        Ok(read_len.get() as usize)
+    }
+
+    /// Read some data at a given index group/offset, ensuring that the returned data has
+    /// exactly the size of the passed buffer.
+    pub async fn read_exact(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+        data: &mut [u8],
+    ) -> Result<()> {
+        let len = self.read(index_group, index_offset, data).await?;
+        if len != data.len() {
+            return Err(Error::Reply(
+                "read data",
+                "got less data than expected",
+                len as u32,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Read data of given type.
+    ///
+    /// Any type that supports `zerocopy::FromBytes` can be read.  You can also
+    /// derive that trait on your own structures and read structured data
+    /// directly from the symbol.
+    ///
+    /// Note: to be independent of the host's byte order, use the integer types
+    /// defined in `zerocopy::byteorder`.
+    pub async fn read_value<T: Default + IntoBytes + FromBytes>(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+    ) -> Result<T> {
+        let mut buf = T::default();
+        self.read_exact(index_group, index_offset, buf.as_mut_bytes())
+            .await?;
+        Ok(buf)
+    }
+
+    /// Write some data to a given index group/offset.
+    pub async fn write(&self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
+        let header = IndexLength {
+            index_group: U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            length: U32::new(data.len().try_into()?),
+        };
+        self.communicate(Command::Write, &[header.as_bytes(), data], &mut [])
+            .await?;
+        Ok(())
+    }
+
+    /// Write data of given type.
+    ///
+    /// See `read_value` for details.
+    pub async fn write_value<T: IntoBytes + Immutable>(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+        value: &T,
+    ) -> Result<()> {
+        self.write(index_group, index_offset, value.as_bytes())
+            .await
+    }
+
+    /// Write some data to a given index group/offset and then read back some
+    /// reply from there.  This is not the same as a write() followed by read();
+    /// it is used as a kind of RPC call.
+    pub async fn write_read(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+        write_data: &[u8],
+        read_data: &mut [u8],
+    ) -> Result<usize> {
+        let header = IndexLengthRW {
+            index_group: U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            read_length: U32::new(read_data.len().try_into()?),
+            write_length: U32::new(write_data.len().try_into()?),
+        };
+        let mut read_len = U32::new(0);
+        self.communicate(
+            Command::ReadWrite,
+            &[header.as_bytes(), write_data],
+            &mut [read_len.as_mut_bytes(), read_data],
+        )
+        .await?;
+        Ok(read_len.get() as usize)
+    }
+
+    /// Like `write_read`, but ensure the returned data length matches the output buffer.
+    pub async fn write_read_exact(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+        write_data: &[u8],
+        read_data: &mut [u8],
+    ) -> Result<()> {
+        let len = self
+            .write_read(index_group, index_offset, write_data, read_data)
+            .await?;
+        if len != read_data.len() {
+            return Err(Error::Reply(
+                "write/read data",
+                "got less data than expected",
+                len as u32,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the ADS and device state of the device.
+    pub async fn get_state(&self) -> Result<(AdsState, u16)> {
+        let mut state = ReadState::new_zeroed();
+        self.communicate(Command::ReadState, &[], &mut [state.as_mut_bytes()])
+            .await?;
+
+        // Convert ADS state to the enum type
+        let ads_state = AdsState::try_from(state.ads_state.get())
+            .map_err(|e| Error::Reply("read state", e, state.ads_state.get().into()))?;
+
+        Ok((ads_state, state.dev_state.get()))
+    }
+
+    /// (Try to) set the ADS and device state of the device.
+    pub async fn write_control(&self, ads_state: AdsState, dev_state: u16) -> Result<()> {
+        let data = WriteControl {
+            ads_state: U16::new(ads_state as _),
+            dev_state: U16::new(dev_state),
+            data_length: U32::new(0),
+        };
+        self.communicate(Command::WriteControl, &[data.as_bytes()], &mut [])
+            .await?;
+        Ok(())
+    }
+
     /// Low-level function to execute an ADS command.
     ///
     /// Writes a data from a number of input buffers, and returns data in a
@@ -284,7 +449,6 @@ impl Client {
     pub async fn communicate(
         &self,
         cmd: Command,
-        target: AmsAddr,
         payload_bufs: &[&[u8]],
         result_bufs: &mut [&mut [u8]],
     ) -> Result<usize> {
@@ -300,8 +464,8 @@ impl Client {
         let header = AdsHeader {
             ams_cmd: 0, // send command
             length: U32::new(ads_data_len.try_into()?),
-            dest_netid: target.netid(),
-            dest_port: U16::new(target.port()),
+            dest_netid: self.target.netid(),
+            dest_port: U16::new(self.target.port()),
             src_netid: self.source.netid(),
             src_port: U16::new(self.source.port()),
             command: U16::new(cmd as u16),
@@ -391,7 +555,9 @@ impl Client {
         // it is consistent and addressed to us.
 
         // The source netid/port must match what we sent.
-        if (resp_header.src_netid, resp_header.src_port.get()) != (target.netid(), target.port()) {
+        if (resp_header.src_netid, resp_header.src_port.get())
+            != (self.target.netid(), self.target.port())
+        {
             return Err(Error::Reply(
                 cmd.action(),
                 "response wasn't from commanded target",
@@ -497,7 +663,7 @@ struct ClientReceiver {
 impl ClientReceiver {
     fn start(
         &mut self,
-        socket: OwnedReadHalf,
+        mut socket: OwnedReadHalf,
         source: AmsAddr,
         commands: PendingCommands,
         subscribers: NotificationSubscribers,
@@ -509,23 +675,22 @@ impl ClientReceiver {
             // TODO
             // let _ = socket.shutdown(Shutdown::Both);
 
-            if let Ok(ref mut commands) = commands.lock() {
-                let keys = commands.keys().cloned().collect_vec();
-                for key in keys {
-                    if let Some(channel) = commands.remove(&key) {
-                        let err = if let Err(e) = &result {
-                            Err(e.clone())
-                        } else {
-                            Err(Error::Reply(
-                                "handling clean shutdown",
-                                "pending request at client shutdown",
-                                0,
-                            ))
-                        };
-
-                        let _ = channel.send(err);
+            let mut commands = commands.lock().await;
+            let keys = commands.keys().cloned().collect_vec();
+            for key in keys {
+                if let Some(channel) = commands.remove(&key) {
+                    let err = if let Err(e) = &result {
+                        Err(e.clone())
+                    } else {
+                        Err(Error::Reply(
+                            "handling clean shutdown",
+                            "pending request at client shutdown",
+                            0,
+                        ))
                     };
-                }
+
+                    let _ = channel.send(err);
+                };
             }
 
             result
@@ -534,8 +699,8 @@ impl ClientReceiver {
         let _ = self.handle.insert(rx_worker);
     }
 
-    fn stop(&mut self) -> Option<Result<()>> {
-        self.handle.take()?.join().ok()
+    async fn stop(&mut self) -> Option<Result<()>> {
+        self.handle.take()?.await.ok()
     }
 
     async fn reader_work(
