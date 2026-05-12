@@ -1,11 +1,13 @@
+use std::sync::Arc;
+
 use tokio::net::ToSocketAddrs;
 use tracing::{info, warn};
 
-use crate::{core, AdsClient, AmsAddr, Error, Result, Timeouts};
+use crate::{core, AmsAddr, Error, Result, Timeouts};
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub enum AdsConnection {
-    Connected(AdsClient),
+    Connected(Arc<core::Client>),
     #[default]
     Disconnected,
 }
@@ -17,23 +19,13 @@ impl AdsConnection {
         target: AmsAddr,
         source: Option<AmsAddr>,
         timeouts: Timeouts,
-        set_to_run_mode: bool,
     ) -> Result<()> {
         match self {
             AdsConnection::Connected(_) => {
                 info!("Attempted to connect to PLC but it is already connected!")
             }
             AdsConnection::Disconnected => {
-                let core_client = core::Client::new(router, target, source, timeouts).await?;
-                let client = AdsClient::new(core_client);
-
-                if !client.is_run_mode().await? && set_to_run_mode {
-                    client.set_to_run_mode().await?;
-                }
-
-                if !client.is_run_mode().await? {
-                    return Err(Error::Other("PLC not in run mode, stopping connection."));
-                }
+                let client = core::Client::new(router, target, source, timeouts).await?;
 
                 *self = AdsConnection::Connected(client);
             }
@@ -59,15 +51,7 @@ impl AdsConnection {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn client(&self) -> Option<&AdsClient> {
-        match self {
-            AdsConnection::Connected(client) => Some(client),
-            AdsConnection::Disconnected => None,
-        }
-    }
-
-    pub fn client_mut(&mut self) -> Option<&mut AdsClient> {
+    pub fn client(&self) -> Option<&core::Client> {
         match self {
             AdsConnection::Connected(client) => Some(client),
             AdsConnection::Disconnected => None,

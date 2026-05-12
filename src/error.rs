@@ -32,8 +32,11 @@ pub enum Error {
     #[error("failed during synchronization of an Ads request/response: {0} ({1})")]
     IoSync(&'static str, &'static str, u32),
 
-    #[error("Symbol Type Tree error {0}")]
+    #[error("symbol Type Tree error {0}")]
     SymbolTypeTree(#[from] SymbolTypeTreeError),
+
+    #[error("disconnected")]
+    Disconnected,
 
     /// An unspecified catch-all error
     #[error("an error occured: {0}")]
@@ -50,6 +53,7 @@ impl Clone for Error {
             Overflow(e) => Overflow(*e),
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
             SymbolTypeTree(e) => SymbolTypeTree(e.clone()),
+            Disconnected => Disconnected,
             Other(ctx) => Other(ctx),
         }
     }

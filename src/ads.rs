@@ -1,10 +1,14 @@
-use std::{net::Ipv4Addr, sync::Arc, time::Duration};
+use bytes::Bytes;
+use std::net::Ipv4Addr;
+use std::{collections::HashMap, fmt::Debug, time::Duration};
+use tokio::sync::mpsc;
 use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
 use tracing::{error, info, warn};
 
 use crate::{
-    AdsConnection, AdsData, AdsParams, AmsAddr, Error, NotificationSubscription, Result, SymbolMap,
-    SymbolTree, SymbolTypeTree, Timeouts,
+    core::{self, index, NotificationAttributes, NotificationTransmissionMode},
+    get_symbol_info, AdsConnection, AdsData, AdsParams, AdsState, AmsAddr, Error, Result,
+    SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree, Timeouts,
 };
 
 #[derive(Debug, Clone)]
@@ -67,16 +71,18 @@ impl<RouterAddr: ToSocketAddrs + Clone> AdsBuilder<RouterAddr> {
     }
 }
 
+/// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
+#[derive(Debug)]
 pub struct Ads<RouterAddr> {
     router: RouterAddr,
     target: AmsAddr,
     source: Option<AmsAddr>,
     timeouts: Timeouts,
     set_to_run_mode: bool,
-    connection: Arc<Mutex<AdsConnection>>,
+    connection: Mutex<AdsConnection>,
+    symbol_handles: Mutex<HashMap<String, SymbolHandle>>,
 }
 
-/// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
 impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     pub fn new(
         router: RouterAddr,
@@ -92,24 +98,35 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
             timeouts,
             set_to_run_mode,
             connection: Default::default(),
+            symbol_handles: Default::default(),
         }
     }
 
-    /// Blocks the current thread until a PLC is successfully connected over ADS.
-    pub async fn run_connection_loop(&self) {
+    /// Connect to a PLC over ADS, retry on failure.
+    pub async fn connect(&self) -> Result<()> {
+        {
+            let mut connection = self.connection.lock().await;
+            connection
+                .connect(self.router.clone(), self.target, self.source, self.timeouts)
+                .await?;
+        }
+
+        if !self.is_run_mode().await? {
+            if self.set_to_run_mode {
+                self.set_to_run_mode().await?;
+            } else {
+                return Err(Error::Other("PLC not in run mode, stopping connection."));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Connect to a PLC over ADS, retry on failure.
+    pub async fn connect_with_retry(&self) {
         loop {
             if !self.is_connected().await {
-                let mut connection = self.connection.lock().await;
-                if let Err(error) = connection
-                    .connect(
-                        self.router.clone(),
-                        self.target,
-                        self.source,
-                        self.timeouts,
-                        self.set_to_run_mode,
-                    )
-                    .await
-                {
+                if let Err(error) = self.connect().await {
                     warn!("PLC connection failed, {}. Retrying in 2 seconds...", error);
                 } else {
                     info!("PLC connection successful!");
@@ -137,20 +154,23 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         }
     }
 
-    /// Read a symbol from the PLC.
-    ///
-    /// Returns None if the PLC is not connected.
-    pub async fn read_symbol<T: AdsData>(&self, symbol: &str) -> Result<Option<T>> {
+    async fn with_client<Callback, Output>(
+        &self,
+        name: &str,
+        mut callback: Callback,
+    ) -> Result<Output>
+    where
+        Callback: AsyncFnMut(&core::Client) -> Result<Output>,
+    {
         let mut connection = self.connection.lock().await;
-
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
+        let Some(client) = connection.client() else {
+            return Err(Error::Disconnected);
         };
 
-        match client.read_symbol(symbol).await {
-            Ok(value) => Ok(Some(value)),
+        match callback(client).await {
+            Ok(value) => Ok(value),
             Err(error) => {
-                error!("PLC client error when reading symbol {}: {}", symbol, error);
+                error!("{name} error: {error}");
 
                 connection.handle_disconnect_error(&error).await?;
 
@@ -159,180 +179,272 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         }
     }
 
-    /// Gets a symbol type tree for a given symbol path.
-    ///
-    /// Returns None if the PLC is not connected.
-    /// Returns any errors from the PLC
-    pub async fn get_dynamic_type_tree(&self, symbol: &str) -> Result<Option<SymbolTypeTree>> {
-        let mut connection = self.connection.lock().await;
+    async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
+        let mut read_data = [0; 4];
+        let write_data = symbol.as_bytes();
 
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
-        };
+        self.with_client("get_symbol_handle", async move |client| {
+            client
+                .read_write(index::GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
+                .await?;
 
-        match client.get_dynamic_type_tree(symbol).await {
-            Ok(type_tree) => Ok(Some(type_tree)),
-            Err(error) => {
-                error!(
-                    "ADS client error when getting information for symbol {}: {}",
-                    symbol, error
-                );
-
-                match &error {
-                    Error::SymbolTypeTree(_symbol_type_tree_error) => {
-                        connection.disconnect().await?
-                    }
-                    error => connection.handle_disconnect_error(error).await?,
-                };
-
-                Err(error)
-            }
-        }
+            Ok(SymbolHandle(u32::from_le_bytes(read_data)))
+        })
+        .await
     }
 
-    /// Calls an RPC method on the PLC.
-    ///
-    /// Returns None if the PLC is not connected.
+    async fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle> {
+        let mut symbol_handles = self.symbol_handles.lock().await;
+        let handle = symbol_handles.get(symbol);
+        let handle = match handle {
+            Some(handle) => handle.to_owned(),
+            None => {
+                let handle = self.get_symbol_handle(symbol).await?;
+                symbol_handles.insert(symbol.to_owned(), handle);
+                handle
+            }
+        };
+
+        Ok(handle)
+    }
+
+    /// Returns if the connected ADS device is in run mode.
+    pub async fn is_run_mode(&self) -> Result<bool> {
+        self.with_client("is_run_mode", async move |client| {
+            let state_info = client.read_state().await?;
+            Ok(state_info.ads_state == AdsState::Run)
+        })
+        .await
+    }
+
+    /// Attempts to set the ADS device into run mode if it is not already in it.
+    pub async fn set_to_run_mode(&self) -> Result<()> {
+        self.with_client("set_to_run_mode", async move |client| {
+            let device_info = client.read_device_info().await?;
+            info!("Device Info: {:?}", device_info);
+
+            let state_info = client.read_state().await?;
+            info!("Device State: {:?}", state_info);
+
+            if state_info.ads_state != AdsState::Run {
+                info!("Attempting to set PLC to run mode...");
+
+                client
+                    .write_control(AdsState::Run, state_info.device_state)
+                    .await?;
+
+                let state_info = client.read_state().await?;
+                info!("Device State: {:?}", state_info);
+                assert_eq!(state_info.ads_state, AdsState::Run);
+            }
+
+            Ok(())
+        })
+        .await
+    }
+
+    /// Read the value of a symbol with a given type once.
+    pub async fn read_symbol<T: AdsData>(&mut self, symbol: &str) -> Result<T> {
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+
+        self.with_client("read_symbol", async move |client| {
+            let mut read_data = T::default();
+
+            client
+                .read_exact(
+                    index::RW_SYMVAL_BYHANDLE,
+                    index_offset,
+                    read_data.as_mut_bytes(),
+                )
+                .await?;
+
+            Ok(read_data)
+        })
+        .await
+    }
+
+    /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
+    pub async fn get_dynamic_type_tree(&self, symbol: &str) -> Result<SymbolTypeTree> {
+        self.with_client("get_dynamic_type_tree", async move |client| {
+            let symbol_name = symbol;
+            let (symbols, type_map) = get_symbol_info(&client).await?;
+            let mut symbol = None;
+
+            for symbol_info in symbols {
+                if symbol_info.name.to_lowercase() == symbol_name.to_lowercase() {
+                    symbol = Some(symbol_info);
+                }
+            }
+
+            let Some(symbol) = symbol else {
+                return Ok(SymbolTypeTree::Missing);
+            };
+
+            let symbol_type_tree = match SymbolTypeTree::from_symbol(&symbol, &type_map) {
+                Ok(symbol_type_tree) => symbol_type_tree,
+                Err(err) => {
+                    error!("Error when getting symbol type from type map {err:?}");
+                    SymbolTypeTree::Unknown(symbol.size)
+                }
+            };
+
+            Ok(symbol_type_tree)
+        })
+        .await
+    }
+
+    /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters.
     pub async fn invoke_rpc_method<Params: AdsParams>(
-        &self,
+        &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<Option<()>> {
-        let mut connection = self.connection.lock().await;
+    ) -> Result<()> {
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+        let write_data = params.into_data();
 
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
-        };
+        self.with_client("invoke_rpc_method", async move |client| {
+            client
+                .read_write_exact(
+                    index::RW_SYMVAL_BYHANDLE,
+                    index_offset,
+                    &mut [],
+                    &write_data,
+                )
+                .await?;
 
-        if let Err(error) = client.invoke_rpc_method(symbol, params).await {
-            error!(
-                "PLC client error when invoking RPC method {}: {}",
-                symbol, error
-            );
-
-            connection.handle_disconnect_error(&error).await?;
-
-            return Err(error);
-        };
-
-        Ok(Some(()))
+            Ok(())
+        })
+        .await
     }
 
-    /// Calls an RPC method on the PLC that returns a value.
-    ///
-    /// Returns None if the PLC is not connected.
+    /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters and returns the resulting value.
     pub async fn fetch_from_rpc_method<Params: AdsParams, Value: AdsData>(
-        &self,
+        &mut self,
         symbol: &str,
         params: Params,
-    ) -> Result<Option<Value>> {
-        let mut connection = self.connection.lock().await;
+    ) -> Result<Value> {
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+        let write_data = params.into_data();
 
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
-        };
+        self.with_client("fetch_from_rpc_method", async move |client| {
+            let mut read_data = Value::default();
 
-        match client.fetch_from_rpc_method(symbol, params).await {
-            Ok(value) => Ok(Some(value)),
-            Err(error) => {
-                error!(
-                    "PLC client error when invoking RPC method {}: {}",
-                    symbol, error
-                );
+            client
+                .read_write_exact(
+                    index::RW_SYMVAL_BYHANDLE,
+                    index_offset,
+                    read_data.as_mut_bytes(),
+                    &write_data,
+                )
+                .await?;
 
-                connection.handle_disconnect_error(&error).await?;
-
-                Err(error)
-            }
-        }
+            Ok(read_data)
+        })
+        .await
     }
 
-    /// Subscribes to a notification channel on the PLC, returning a handle to the channel.
-    ///
-    /// Returns None if the PLC is not connected.
+    /// Subscribes to a symbol.
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
-        &self,
+        &mut self,
         symbol: &str,
-    ) -> Result<Option<NotificationSubscription<T>>> {
-        let mut connection = self.connection.lock().await;
-
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
+    ) -> Result<NotificationSubscription<T>> {
+        let size = T::size();
+        let from_bytes = |payload| {
+            // TODO(mw): Do we need to handle this failure better?
+            T::from_bytes(payload).expect("Failed to parse PlcDataType from notification bytes")
         };
-
-        match client.subscribe(symbol).await {
-            Ok(subscription) => Ok(Some(subscription)),
-            Err(error) => {
-                error!(
-                    "PLC client error when subscribing to notifications from {}: {}",
-                    symbol, error
-                );
-
-                connection.handle_disconnect_error(&error).await?;
-
-                Err(error)
-            }
-        }
+        self.subscribe_inner(symbol, size, from_bytes).await
     }
 
-    /// Subscribes to the given symbol using the symbol type tree and sends deserialised tree-like data back with the sender channel.
+    /// Subscribes to a symbol tree using the symbol type tree.
     ///
-    /// Returns None if the PLC is not connected.
-    /// Returns any errors from the PLC.
+    /// Sends deserialised tree-like data back with the sender channel.
     pub async fn subscribe_tree(
-        &self,
+        &mut self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
-    ) -> Result<Option<NotificationSubscription<SymbolTree>>> {
-        let mut connection = self.connection.lock().await;
-
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
-        };
-
-        match client.subscribe_tree(symbol, symbol_type_tree).await {
-            Ok(subscription) => Ok(Some(subscription)),
-            Err(error) => {
-                error!(
-                    "PLC client error when subscribing to notifications from {}: {}",
-                    symbol, error
-                );
-
-                connection.handle_disconnect_error(&error).await?;
-
-                Err(error)
-            }
-        }
+    ) -> Result<NotificationSubscription<SymbolTree>> {
+        let size = symbol_type_tree.get_size();
+        let from_bytes = move |payload| SymbolTree::from_bytes(payload, &symbol_type_tree, 0);
+        self.subscribe_inner(symbol, size, from_bytes).await
     }
 
-    /// Subscribes to the given symbol using the symbol type tree and sends deserialised flattened map data back with the sender channel.
-    /// The key to the map is the path of the symbol relative to the symbol provided.
+    /// Subscribes to the given symbol using the symbol type map.
     ///
-    /// Returns None if the PLC is not connected.
-    /// Returns any errors from the PLC.
+    /// Sends deserialised flattened map data back with the sender channel.
+    /// The key to the map is the path of the symbol relative to the symbol provided.
     pub async fn subscribe_map(
-        &self,
+        &mut self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
-    ) -> Result<Option<NotificationSubscription<SymbolMap>>> {
-        let mut connection = self.connection.lock().await;
+    ) -> Result<NotificationSubscription<SymbolMap>> {
+        let size = symbol_type_tree.get_size();
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, String::new());
+        let from_bytes = move |payload| SymbolMap::from_bytes(payload, &symbol_type_map);
+        self.subscribe_inner(symbol, size, from_bytes).await
+    }
 
-        let Some(client) = connection.client_mut() else {
-            return Ok(None);
+    async fn subscribe_inner<T: Send + Sync + 'static>(
+        &mut self,
+        symbol: &str,
+        size: usize,
+        from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
+    ) -> Result<NotificationSubscription<T>> {
+        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+
+        let attributes = NotificationAttributes {
+            length: size,
+            trans_mode: NotificationTransmissionMode::ServerOnChange,
+            max_delay: Duration::ZERO,
+            // TODO: setting this to higher e.g: 1000ms does not work, maybe because the status data is changing every PLC cycle?
+            // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
+            cycle_time: Duration::from_millis(10),
         };
 
-        match client.subscribe_map(symbol, symbol_type_tree).await {
-            Ok(subscription) => Ok(Some(subscription)),
-            Err(error) => {
-                error!(
-                    "PLC client error when subscribing to notifications from {}: {}",
-                    symbol, error
-                );
+        let (receiver, _handle) = self
+            .with_client("subscribe", async move |client| {
+                client
+                    .add_notification(index::RW_SYMVAL_BYHANDLE, index_offset, &attributes)
+                    .await
+            })
+            .await?;
 
-                connection.handle_disconnect_error(&error).await?;
+        let subscription = NotificationSubscription {
+            receiver,
+            from_bytes: Box::new(from_bytes),
+        };
 
-                Err(error)
-            }
-        }
+        Ok(subscription)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct SymbolHandle(u32);
+
+impl SymbolHandle {
+    pub fn as_u32(&self) -> u32 {
+        self.0
+    }
+}
+
+pub struct NotificationSubscription<T> {
+    from_bytes: Box<dyn Fn(Bytes) -> T + Send + Sync + 'static>,
+    receiver: mpsc::Receiver<Bytes>,
+}
+
+impl<T> Debug for NotificationSubscription<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificaionSubscription")
+            .field("receiver", &self.receiver)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> NotificationSubscription<T> {
+    pub async fn recv(&mut self) -> Option<T> {
+        self.receiver
+            .recv()
+            .await
+            .map(|bytes| (self.from_bytes)(bytes))
     }
 }
