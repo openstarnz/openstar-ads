@@ -3,7 +3,7 @@
 mod ads;
 mod client;
 mod connection;
-pub mod core;
+pub(crate) mod core;
 mod data_types;
 mod error;
 mod params;
@@ -13,6 +13,7 @@ pub use self::ads::*;
 pub use self::client::NotificationSubscription;
 pub(crate) use self::client::*;
 pub(crate) use self::connection::*;
+pub use self::core::{AdsState, AmsAddr, AmsNetId, AmsPort, DeviceInfo, Timeouts};
 pub use self::data_types::*;
 pub use self::error::*;
 pub use self::params::*;

@@ -1,13 +1,16 @@
-pub mod client;
+mod client;
 pub mod index;
-pub mod netid;
-pub mod notif;
+mod netid;
+mod notification;
 pub mod protocol;
-pub mod strings;
+mod strings;
 
-pub use client::{Client, ClientBuilder, Timeouts};
-pub use netid::{AmsAddr, AmsNetId, AmsPort};
-pub use protocol::AdsState;
+pub use self::client::{Client, Timeouts};
+pub use self::netid::{AmsAddr, AmsNetId, AmsPort};
+pub(crate) use self::notification::{
+    Notification, NotificationAttributes, NotificationTransmissionMode,
+};
+pub use self::protocol::{AdsState, DeviceInfo};
 
 /// The default port for TCP communication.
 pub const PORT: u16 = 0xBF02;

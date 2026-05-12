@@ -3,77 +3,93 @@ use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
 use tracing::{error, info, warn};
 
 use crate::{
-    AdsConnection, AdsData, AdsError, AdsParams, NotificationSubscription, Result, SymbolMap,
-    SymbolTree, SymbolTypeTree,
+    AdsConnection, AdsData, AdsParams, AmsAddr, Error, NotificationSubscription, Result, SymbolMap,
+    SymbolTree, SymbolTypeTree, Timeouts,
 };
 
-pub use ads::{AdsTimeout, AmsAddr, AmsNetId, AmsPort};
-
+#[derive(Debug, Clone)]
 pub struct AdsBuilder<RouterAddr> {
-    client_builder: ads::ClientBuilder<RouterAddr>,
+    router: RouterAddr,
+    target: AmsAddr,
+    source: Option<AmsAddr>,
+    timeouts: Timeouts,
     set_to_run_mode: bool,
 }
 
 impl AdsBuilder<()> {
-    pub fn new(dst_ams_addr: ads::AmsAddr) -> AdsBuilder<(Ipv4Addr, u16)> {
+    pub fn new(target: AmsAddr) -> AdsBuilder<(Ipv4Addr, u16)> {
         AdsBuilder {
-            client_builder: ads::ClientBuilder::new(dst_ams_addr),
+            router: (Ipv4Addr::new(127, 0, 0, 1), 48898),
+            target,
+            source: Default::default(),
+            timeouts: Default::default(),
             set_to_run_mode: Default::default(),
         }
     }
 }
 
 impl<RouterAddr> AdsBuilder<RouterAddr> {
-    pub fn router_addr<NextRouterAddr: ToSocketAddrs>(
+    pub fn router<NextRouterAddr: ToSocketAddrs>(
         self,
-        router_addr: NextRouterAddr,
+        router: NextRouterAddr,
     ) -> AdsBuilder<NextRouterAddr> {
         AdsBuilder {
-            client_builder: self.client_builder.router_addr(router_addr),
+            router,
+            target: self.target,
+            source: self.source,
+            timeouts: self.timeouts,
             set_to_run_mode: self.set_to_run_mode,
         }
     }
 }
 
 impl<RouterAddr> AdsBuilder<RouterAddr> {
-    pub fn src_ams_addr(mut self, src_ams_addr: AmsAddr) -> Self {
-        self.client_builder = self.client_builder.src_ams_addr(src_ams_addr);
+    pub fn source(mut self, source: AmsAddr) -> Self {
+        self.source = Some(source);
         self
     }
 
-    pub fn timeout(mut self, timeout: AdsTimeout) -> Self {
-        self.client_builder = self.client_builder.timeout(timeout);
-        self
-    }
-
-    pub fn retry_delay(mut self, retry_delay: Option<Duration>) -> Self {
-        self.client_builder = self.client_builder.retry_delay(retry_delay);
-        self
-    }
-
-    pub fn set_to_run_mode(mut self, set_to_run_mode: bool) -> Self {
-        self.set_to_run_mode = set_to_run_mode;
+    pub fn timeouts(mut self, timeouts: Timeouts) -> Self {
+        self.timeouts = timeouts;
         self
     }
 }
 
 impl<RouterAddr: ToSocketAddrs + Clone> AdsBuilder<RouterAddr> {
     pub fn build(self) -> Ads<RouterAddr> {
-        Ads::new(self.client_builder, self.set_to_run_mode)
+        Ads::new(
+            self.router,
+            self.target,
+            self.source,
+            self.timeouts,
+            self.set_to_run_mode,
+        )
     }
 }
 
 pub struct Ads<RouterAddr> {
-    client_builder: ads::ClientBuilder<RouterAddr>,
+    router: RouterAddr,
+    target: AmsAddr,
+    source: Option<AmsAddr>,
+    timeouts: Timeouts,
     set_to_run_mode: bool,
     connection: Arc<Mutex<AdsConnection>>,
 }
 
 /// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
 impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
-    pub fn new(client_builder: ads::ClientBuilder<RouterAddr>, set_to_run_mode: bool) -> Self {
+    pub fn new(
+        router: RouterAddr,
+        target: AmsAddr,
+        source: Option<AmsAddr>,
+        timeouts: Timeouts,
+        set_to_run_mode: bool,
+    ) -> Self {
         Self {
-            client_builder,
+            router,
+            target,
+            source,
+            timeouts,
             set_to_run_mode,
             connection: Default::default(),
         }
@@ -85,7 +101,13 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
             if !self.is_connected().await {
                 let mut connection = self.connection.lock().await;
                 if let Err(error) = connection
-                    .connect(self.client_builder.clone(), self.set_to_run_mode)
+                    .connect(
+                        self.router.clone(),
+                        self.target,
+                        self.source,
+                        self.timeouts,
+                        self.set_to_run_mode,
+                    )
                     .await
                 {
                     warn!("PLC connection failed, {}. Retrying in 2 seconds...", error);
@@ -157,7 +179,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                 );
 
                 match &error {
-                    AdsError::SymbolTypeTree(_symbol_type_tree_error) => {
+                    Error::SymbolTypeTree(_symbol_type_tree_error) => {
                         connection.disconnect().await?
                     }
                     error => connection.handle_disconnect_error(error).await?,

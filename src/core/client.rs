@@ -28,67 +28,16 @@ use zerocopy::{
 
 use crate::{
     core::{
-        notif,
+        notification,
         protocol::{
-            AddNotif, AdsHeader, Command, IndexLength, IndexLengthRW, ReadState, WriteControl,
-            ADS_HEADER_SIZE, AMS_HEADER_SIZE,
+            AddNotif, AdsHeader, AdsStateInfo, Command, DeviceInfo, DeviceInfoRaw, IndexLength,
+            IndexLengthRW, ReadState, WriteControl, ADS_HEADER_SIZE, AMS_HEADER_SIZE,
         },
         AdsState, AmsAddr, AmsNetId,
     },
     error::{ads_error, ErrContext},
     Error, Result,
 };
-
-#[derive(Debug, Clone)]
-pub struct ClientBuilder<RouterAddr> {
-    router: RouterAddr,
-    target: AmsAddr,
-    source: Option<AmsAddr>,
-    timeouts: Timeouts,
-}
-
-impl ClientBuilder<()> {
-    pub fn new(target: AmsAddr) -> ClientBuilder<(Ipv4Addr, u16)> {
-        ClientBuilder {
-            router: (Ipv4Addr::new(127, 0, 0, 1), 48898),
-            target,
-            source: Default::default(),
-            timeouts: Default::default(),
-        }
-    }
-}
-
-impl<RouterAddr> ClientBuilder<RouterAddr> {
-    pub fn router<NextRouterAddr: ToSocketAddrs>(
-        self,
-        router: NextRouterAddr,
-    ) -> ClientBuilder<NextRouterAddr> {
-        ClientBuilder {
-            router,
-            target: self.target,
-            source: self.source,
-            timeouts: self.timeouts,
-        }
-    }
-}
-
-impl<RouterAddr> ClientBuilder<RouterAddr> {
-    pub fn source(mut self, source: AmsAddr) -> Self {
-        self.source = Some(source);
-        self
-    }
-
-    pub fn timeouts(mut self, timeouts: Timeouts) -> Self {
-        self.timeouts = timeouts;
-        self
-    }
-}
-
-impl<RouterAddr: ToSocketAddrs> ClientBuilder<RouterAddr> {
-    pub async fn build(self) -> Result<Client> {
-        Client::new(self.router, self.target, self.source, self.timeouts).await
-    }
-}
 
 /// Holds the different timeouts that will be used by the Client.
 /// None means no timeout in every case.
@@ -280,6 +229,29 @@ impl Client {
         })
     }
 
+    /// Read the device's name + version.
+    pub async fn read_device_info(&self) -> Result<DeviceInfo> {
+        let mut data = DeviceInfoRaw::new_zeroed();
+
+        self.communicate(Command::DevInfo, &[], &mut [data.as_mut_bytes()])
+            .await?;
+
+        // Decode the name string, which is null-terminated.  Technically it's
+        // Windows-1252, but in practice no non-ASCII occurs.
+        let name = data
+            .name
+            .iter()
+            .take_while(|&&ch| ch > 0)
+            .map(|&ch| ch as char)
+            .collect::<String>();
+        Ok(DeviceInfo {
+            major: data.major,
+            minor: data.minor,
+            version: data.version.get(),
+            name,
+        })
+    }
+
     /// Read some data at a given index group/offset.  Returned data can be shorter than
     /// the buffer, the length is the return value.
     pub async fn read(
@@ -372,12 +344,12 @@ impl Client {
     /// Write some data to a given index group/offset and then read back some
     /// reply from there.  This is not the same as a write() followed by read();
     /// it is used as a kind of RPC call.
-    pub async fn write_read(
+    pub async fn read_write(
         &self,
         index_group: u32,
         index_offset: u32,
-        write_data: &[u8],
         read_data: &mut [u8],
+        write_data: &[u8],
     ) -> Result<usize> {
         let header = IndexLengthRW {
             index_group: U32::new(index_group),
@@ -396,15 +368,15 @@ impl Client {
     }
 
     /// Like `write_read`, but ensure the returned data length matches the output buffer.
-    pub async fn write_read_exact(
+    pub async fn read_write_exact(
         &self,
         index_group: u32,
         index_offset: u32,
-        write_data: &[u8],
         read_data: &mut [u8],
+        write_data: &[u8],
     ) -> Result<()> {
         let len = self
-            .write_read(index_group, index_offset, write_data, read_data)
+            .read_write(index_group, index_offset, read_data, write_data)
             .await?;
         if len != read_data.len() {
             return Err(Error::Reply(
@@ -417,8 +389,9 @@ impl Client {
     }
 
     /// Return the ADS and device state of the device.
-    pub async fn get_state(&self) -> Result<(AdsState, u16)> {
+    pub async fn read_state(&self) -> Result<AdsStateInfo> {
         let mut state = ReadState::new_zeroed();
+
         self.communicate(Command::ReadState, &[], &mut [state.as_mut_bytes()])
             .await?;
 
@@ -426,7 +399,12 @@ impl Client {
         let ads_state = AdsState::try_from(state.ads_state.get())
             .map_err(|e| Error::Reply("read state", e, state.ads_state.get().into()))?;
 
-        Ok((ads_state, state.dev_state.get()))
+        let device_state = state.dev_state.get();
+
+        Ok(AdsStateInfo {
+            ads_state,
+            device_state,
+        })
     }
 
     /// (Try to) set the ADS and device state of the device.
@@ -664,8 +642,8 @@ impl Client {
         &self,
         index_group: u32,
         index_offset: u32,
-        attributes: &notif::Attributes,
-    ) -> Result<(notif::Handle, mpsc::Receiver<Bytes>)> {
+        attributes: &notification::NotificationAttributes,
+    ) -> Result<(notification::Handle, mpsc::Receiver<Bytes>)> {
         let data = AddNotif {
             index_group: U32::new(index_group),
             index_offset: U32::new(index_offset),
@@ -694,7 +672,7 @@ impl Client {
     }
 
     /// Delete a notification with given handle.
-    pub async fn delete_notification(&self, handle: notif::Handle) -> Result<()> {
+    pub async fn delete_notification(&self, handle: notification::Handle) -> Result<()> {
         self.communicate(
             Command::DeleteNotification,
             &[U32::new(handle).as_bytes()],
@@ -870,9 +848,9 @@ impl ClientReceiver {
                 }
 
                 // Send the notification to whoever wants to receive it.
-                if let Ok(notif) =
-                    notif::Notification::new([ads_header_buf.as_slice(), &payload_buf].concat())
-                {
+                if let Ok(notif) = notification::Notification::new(
+                    [ads_header_buf.as_slice(), &payload_buf].concat(),
+                ) {
                     let subscribers = subscribers.lock().await;
                     for sample in notif.samples() {
                         if let Some(subscriber) = subscribers.get(&sample.handle) {

@@ -1,4 +1,3 @@
-use ads_client::{self as ads, AdsNotificationAttrib, StateInfo};
 use bytes::Bytes;
 use std::{
     collections::HashMap,
@@ -6,13 +5,15 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
-    get_symbol_info, AdsData, AdsError, AdsParams, Result, SymbolMap, SymbolMapExt, SymbolTree,
-    SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
+    core::{self, NotificationAttributes, NotificationTransmissionMode},
+    get_symbol_info, AdsData, AdsParams, AdsState, Error, Result, SymbolMap, SymbolMapExt,
+    SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -67,7 +68,7 @@ impl<T> NotificationSubscription<T> {
 }
 
 pub struct AdsClient {
-    ads_client: ads::Client,
+    core_client: core::Client,
     symbol_handles: HashMap<String, SymbolHandle>,
     notification_handles: Vec<NotificationHandle>,
 }
@@ -82,9 +83,9 @@ const RW_SYMVAL_BYHANDLE: u32 = 0xF005;
 
 /// Provides a more user friendly wrapper to interact with the OpenStar PLC's.
 impl AdsClient {
-    pub fn new(ads_client: ads::Client) -> Self {
+    pub fn new(core_client: core::Client) -> Self {
         Self {
-            ads_client,
+            core_client,
             symbol_handles: Default::default(),
             notification_handles: Default::default(),
         }
@@ -94,7 +95,7 @@ impl AdsClient {
         let mut read_data = [0; GET_SYMHANDLE_BYNAME_LEN];
         let write_data = symbol.as_bytes();
 
-        self.ads_client
+        self.core_client
             .read_write(GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
             .await?;
 
@@ -117,32 +118,28 @@ impl AdsClient {
 
     /// Returns if the connected ADS device is in run mode.
     pub async fn is_run_mode(&self) -> Result<bool> {
-        let state_info = self.ads_client.read_state().await?;
-        Ok(state_info.ads_state == ads::AdsState::Run)
+        let state_info = self.core_client.read_state().await?;
+        Ok(state_info.ads_state == AdsState::Run)
     }
 
     /// Attempts to set the ADS device into run mode if it is not already in it.
     pub async fn set_to_run_mode(&self) -> Result<()> {
-        let device_info = self.ads_client.read_device_info().await?;
+        let device_info = self.core_client.read_device_info().await?;
         info!("Device Info: {:?}", device_info);
 
-        let state_info = self.ads_client.read_state().await?;
+        let state_info = self.core_client.read_state().await?;
         info!("Device State: {:?}", state_info);
 
-        if state_info.ads_state != ads::AdsState::Run {
+        if state_info.ads_state != AdsState::Run {
             info!("Attempting to set PLC to run mode...");
 
-            let next_state_info = StateInfo {
-                ads_state: ads::AdsState::Run,
-                device_state: state_info.device_state,
-            };
-            self.ads_client
-                .write_control(&next_state_info, None)
+            self.core_client
+                .write_control(AdsState::Run, state_info.device_state)
                 .await?;
 
-            let state_info = self.ads_client.read_state().await?;
+            let state_info = self.core_client.read_state().await?;
             info!("Device State: {:?}", state_info);
-            assert_eq!(state_info.ads_state, ads::AdsState::Run);
+            assert_eq!(state_info.ads_state, AdsState::Run);
         }
 
         Ok(())
@@ -155,10 +152,10 @@ impl AdsClient {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
         read_exact(
-            &self.ads_client,
+            &self.core_client,
             RW_SYMVAL_BYHANDLE,
             index_offset,
-            read_data.as_bytes_mut(),
+            read_data.as_mut_bytes(),
         )
         .await?;
 
@@ -168,7 +165,7 @@ impl AdsClient {
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
     pub async fn get_dynamic_type_tree(&self, symbol: &str) -> Result<SymbolTypeTree> {
         let symbol_name = symbol;
-        let (symbols, type_map) = get_symbol_info(&self.ads_client).await?;
+        let (symbols, type_map) = get_symbol_info(&self.core_client).await?;
         let mut symbol = None;
 
         for symbol_info in symbols {
@@ -202,7 +199,7 @@ impl AdsClient {
         let write_data = params.into_data();
 
         read_write_exact(
-            &self.ads_client,
+            &self.core_client,
             RW_SYMVAL_BYHANDLE,
             index_offset,
             &mut [],
@@ -224,10 +221,10 @@ impl AdsClient {
         let write_data = params.into_data();
 
         read_write_exact(
-            &self.ads_client,
+            &self.core_client,
             RW_SYMVAL_BYHANDLE,
             index_offset,
-            read_data.as_bytes_mut(),
+            read_data.as_mut_bytes(),
             &write_data,
         )
         .await?;
@@ -240,7 +237,7 @@ impl AdsClient {
         &mut self,
         symbol: &str,
     ) -> Result<NotificationSubscription<T>> {
-        let size = T::size() as u32;
+        let size = T::size();
         let from_bytes = |payload| {
             // TODO(mw): Do we need to handle this failure better?
             T::from_bytes(payload).expect("Failed to parse PlcDataType from notification bytes")
@@ -254,7 +251,7 @@ impl AdsClient {
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
     ) -> Result<NotificationSubscription<SymbolTree>> {
-        let size = symbol_type_tree.get_size() as u32;
+        let size = symbol_type_tree.get_size();
         let from_bytes = move |payload| SymbolTree::from_bytes(payload, &symbol_type_tree, 0);
         self.subscribe_inner(symbol, size, from_bytes).await
     }
@@ -265,7 +262,7 @@ impl AdsClient {
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
     ) -> Result<NotificationSubscription<SymbolMap>> {
-        let size = symbol_type_tree.get_size() as u32;
+        let size = symbol_type_tree.get_size();
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, String::new());
         let from_bytes = move |payload| SymbolMap::from_bytes(payload, &symbol_type_map);
         self.subscribe_inner(symbol, size, from_bytes).await
@@ -274,22 +271,19 @@ impl AdsClient {
     async fn subscribe_inner<T: Send + Sync + 'static>(
         &mut self,
         symbol: &str,
-        size: u32,
+        size: usize,
         from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
     ) -> Result<NotificationSubscription<T>> {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
-        let attributes = AdsNotificationAttrib {
-            cb_length: size,
-            trans_mode: ads::AdsTransMode::OnChange,
-            // max_delay in units of 100ns
-            max_delay: 0,
-            // cycle_time in units of 100ns
+        let attributes = NotificationAttributes {
+            length: size,
+            trans_mode: NotificationTransmissionMode::ServerOnChange,
+            max_delay: Duration::ZERO,
             // TODO: setting this to higher e.g: 1000ms does not work, maybe because the status data is changing every PLC cycle?
             // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
-            cycle_time: 100_000, // (100,000 * 100ns) = 10,000,000 ns = 10 ms
+            cycle_time: Duration::from_millis(10),
         };
-        let mut ads_handle: u32 = 0;
 
         let (notification_tx, notification_rx) = mpsc::unbounded_channel();
         let callback = move |_handle, _timestamp, payload| {
@@ -298,8 +292,8 @@ impl AdsClient {
             let _ = notification_tx.send(data);
         };
 
-        self.ads_client
-            .add_device_notification(
+        self.core_client
+            .add_notification(
                 RW_SYMVAL_BYHANDLE,
                 index_offset,
                 &attributes,
@@ -339,7 +333,7 @@ impl AdsClient {
     async fn unsubscribe_handle(&self, handle: &NotificationHandle) -> Result<()> {
         handle.cancel();
 
-        self.ads_client
+        self.core_client
             .delete_device_notification(handle.ads_handle)
             .await?;
 
@@ -348,12 +342,12 @@ impl AdsClient {
 }
 
 pub(crate) async fn read_exact(
-    ads_client: &ads::Client,
+    core_client: &ads::Client,
     index_group: u32,
     index_offset: u32,
     data: &mut [u8],
 ) -> Result<()> {
-    let len = ads_client.read(index_group, index_offset, data).await?;
+    let len = core_client.read(index_group, index_offset, data).await?;
     if len != data.len() as u32 {
         Err(AdsError::Reply(
             "read data",
@@ -366,13 +360,13 @@ pub(crate) async fn read_exact(
 }
 
 pub(crate) async fn read_write_exact(
-    ads_client: &ads::Client,
+    core_client: &ads::Client,
     index_group: u32,
     index_offset: u32,
     read_data: &mut [u8],
     write_data: &[u8],
 ) -> Result<()> {
-    let len = ads_client
+    let len = core_client
         .read_write(index_group, index_offset, read_data, write_data)
         .await?;
     if len != read_data.len() as u32 {

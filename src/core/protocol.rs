@@ -155,6 +155,12 @@ impl FromStr for AdsState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct AdsStateInfo {
+    pub ads_state: AdsState,
+    pub device_state: u16,
+}
+
 // Structures used in communication, not exposed to user,
 // but pub(crate) for the test suite.
 

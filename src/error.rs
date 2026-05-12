@@ -4,6 +4,8 @@ use std::io;
 
 use tokio::time::error::Elapsed;
 
+use crate::SymbolTypeTreeError;
+
 /// Result alias for `ads::Error`.
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -30,6 +32,9 @@ pub enum Error {
     #[error("failed during synchronization of an Ads request/response: {0} ({1})")]
     IoSync(&'static str, &'static str, u32),
 
+    #[error("Symbol Type Tree error {0}")]
+    SymbolTypeTree(#[from] SymbolTypeTreeError),
+
     /// An unspecified catch-all error
     #[error("an error occured: {0}")]
     Other(&'static str),
@@ -44,6 +49,7 @@ impl Clone for Error {
             Reply(ctx, e, i) => Reply(ctx, e, *i),
             Overflow(e) => Overflow(*e),
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
+            SymbolTypeTree(e) => SymbolTypeTree(e.clone()),
             Other(ctx) => Other(ctx),
         }
     }

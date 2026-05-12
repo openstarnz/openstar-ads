@@ -1,6 +1,7 @@
 //! Everything to do with ADS notifications.
 
 use std::io;
+use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 use byteorder::{ReadBytesExt, LE};
@@ -10,25 +11,25 @@ use crate::error::ErrContext;
 use crate::{Error, Result};
 
 /// A handle to the notification; this can be used to delete the notification later.
-pub type Handle = u32;
+pub type NotificationHandle = u32;
 
 /// Attributes for creating a notification.
-pub struct Attributes {
+pub struct NotificationAttributes {
     /// Length of data the notification is interested in.
     pub length: usize,
     /// When notification messages should be transmitted.
-    pub trans_mode: TransmissionMode,
+    pub trans_mode: NotificationTransmissionMode,
     /// The maximum delay between change and transmission.
     pub max_delay: Duration,
     /// The cycle time for checking for changes.
     pub cycle_time: Duration,
 }
 
-impl Attributes {
+impl NotificationAttributes {
     /// Return new notification attributes.
     pub fn new(
         length: usize,
-        trans_mode: TransmissionMode,
+        trans_mode: NotificationTransmissionMode,
         max_delay: Duration,
         cycle_time: Duration,
     ) -> Self {
@@ -44,7 +45,7 @@ impl Attributes {
 /// When notifications should be generated.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug)]
-pub enum TransmissionMode {
+pub enum NotificationTransmissionMode {
     /// No transmission.
     NoTrans = 0,
     /// Notify each server cycle.
@@ -127,11 +128,17 @@ impl Notification {
     }
 }
 
+pub struct NotificationSubscription<T> {
+    receiver: mpsc::Receiver<T>,
+    handle: NotificationHandle,
+    client: Arc<super::Client>,
+}
+
 /// A single sample in a notification message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sample<'a> {
     /// The notification handle associated with the data.
-    pub handle: Handle,
+    pub handle: NotificationHandle,
     /// Timestamp of generation (nanoseconds since 01/01/1601).
     pub timestamp: u64, // TODO: better dtype?
     /// Data of the handle at the specified time.

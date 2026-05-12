@@ -624,11 +624,11 @@ pub fn decode_symbol_info(
 pub async fn get_type_info_by_name(client: &core::Client, type_name: &str) -> Result<Type> {
     let mut read_data = vec![0u8; 4096];
     let n = client
-        .write_read(
+        .read_write(
             index::GET_TYPEINFO_BYNAME_EX,
             0,
-            type_name.as_bytes(),
             &mut read_data,
+            type_name.as_bytes(),
         )
         .await?;
     let data = &read_data[..n];
