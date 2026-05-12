@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     io,
-    net::{Ipv4Addr, Shutdown},
+    net::Shutdown,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc,
@@ -28,12 +28,12 @@ use zerocopy::{
 
 use crate::{
     core::{
-        notification,
+        notification::{self, NotificationSubscription},
         protocol::{
             AddNotif, AdsHeader, AdsStateInfo, Command, DeviceInfo, DeviceInfoRaw, IndexLength,
             IndexLengthRW, ReadState, WriteControl, ADS_HEADER_SIZE, AMS_HEADER_SIZE,
         },
-        AdsState, AmsAddr, AmsNetId,
+        AdsState, AmsAddr, AmsNetId, NotificationHandle,
     },
     error::{ads_error, ErrContext},
     Error, Result,
@@ -643,7 +643,7 @@ impl Client {
         index_group: u32,
         index_offset: u32,
         attributes: &notification::NotificationAttributes,
-    ) -> Result<(notification::Handle, mpsc::Receiver<Bytes>)> {
+    ) -> Result<NotificationSubscription> {
         let data = AddNotif {
             index_group: U32::new(index_group),
             index_offset: U32::new(index_offset),
@@ -661,18 +661,17 @@ impl Client {
         )
         .await?;
 
-        // u32, mpsc::Sender<Bytes>>>
         let (sender, receiver) = mpsc::channel(32);
         {
             let mut subscribers = self.subscribers.lock().await;
             subscribers.insert(handle.get(), sender);
         }
 
-        Ok((handle.get(), receiver))
+        Ok(NotificationSubscription::new(receiver, handle.get(), self))
     }
 
     /// Delete a notification with given handle.
-    pub async fn delete_notification(&self, handle: notification::Handle) -> Result<()> {
+    pub async fn delete_notification(&self, handle: NotificationHandle) -> Result<()> {
         self.communicate(
             Command::DeleteNotification,
             &[U32::new(handle).as_bytes()],

@@ -1,17 +1,10 @@
 use bytes::Bytes;
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
-    core::{self, NotificationAttributes, NotificationTransmissionMode},
+    core::{self, index, NotificationAttributes, NotificationTransmissionMode},
     get_symbol_info, AdsData, AdsParams, AdsState, Error, Result, SymbolMap, SymbolMapExt,
     SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
 };
@@ -25,61 +18,28 @@ impl SymbolHandle {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct NotificationHandle {
-    is_cancelled: Arc<AtomicBool>,
-    ads_handle: u32,
-}
-
-impl NotificationHandle {
-    fn new(ads_handle: u32) -> Self {
-        Self {
-            is_cancelled: Arc::new(AtomicBool::new(false)),
-            ads_handle,
-        }
-    }
-
-    fn cancel(&self) {
-        self.is_cancelled.store(true, Ordering::Relaxed);
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.is_cancelled.load(Ordering::Relaxed)
-    }
-}
-
 #[derive(Debug)]
-pub struct NotificationSubscription<T> {
-    receiver: mpsc::UnboundedReceiver<T>,
-    handle: NotificationHandle,
+pub struct NotificationSubscription<'a, T, FromBytesFn: Fn(Bytes) -> T + Send + Sync + 'static> {
+    from_bytes: FromBytesFn,
+    core_subscription: core::NotificationSubscription<'a>,
 }
 
-impl<T> NotificationSubscription<T> {
-    pub fn cancel(&self) {
-        self.handle.cancel();
-    }
-
+impl<'a, T, FromBytesFn> NotificationSubscription<'a, T, FromBytesFn>
+where
+    FromBytesFn: Fn(Bytes) -> T + Send + Sync + 'static,
+{
     pub async fn recv(&mut self) -> Option<T> {
-        if self.handle.is_cancelled() {
-            return None;
-        };
-        self.receiver.recv().await
+        self.core_subscription
+            .recv()
+            .await
+            .map(|bytes| (self.from_bytes)(bytes))
     }
 }
 
 pub struct AdsClient {
     core_client: core::Client,
     symbol_handles: HashMap<String, SymbolHandle>,
-    notification_handles: Vec<NotificationHandle>,
 }
-
-/// Get u32 handle to the name in the write data. Index offset is 0.
-const GET_SYMHANDLE_BYNAME: u32 = 0xF003;
-const GET_SYMHANDLE_BYNAME_LEN: usize = 4;
-
-/// Read/write data for a symbol by handle.
-/// Use the handle as the index offset.
-const RW_SYMVAL_BYHANDLE: u32 = 0xF005;
 
 /// Provides a more user friendly wrapper to interact with the OpenStar PLC's.
 impl AdsClient {
@@ -87,16 +47,15 @@ impl AdsClient {
         Self {
             core_client,
             symbol_handles: Default::default(),
-            notification_handles: Default::default(),
         }
     }
 
     async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
-        let mut read_data = [0; GET_SYMHANDLE_BYNAME_LEN];
+        let mut read_data = [0; 4];
         let write_data = symbol.as_bytes();
 
         self.core_client
-            .read_write(GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
+            .read_write(index::GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
             .await?;
 
         Ok(SymbolHandle(u32::from_le_bytes(read_data)))
@@ -151,13 +110,13 @@ impl AdsClient {
 
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
-        read_exact(
-            &self.core_client,
-            RW_SYMVAL_BYHANDLE,
-            index_offset,
-            read_data.as_mut_bytes(),
-        )
-        .await?;
+        self.core_client
+            .read_exact(
+                index::RW_SYMVAL_BYHANDLE,
+                index_offset,
+                read_data.as_mut_bytes(),
+            )
+            .await?;
 
         Ok(read_data)
     }
@@ -198,14 +157,14 @@ impl AdsClient {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
         let write_data = params.into_data();
 
-        read_write_exact(
-            &self.core_client,
-            RW_SYMVAL_BYHANDLE,
-            index_offset,
-            &mut [],
-            &write_data,
-        )
-        .await?;
+        self.core_client
+            .read_write_exact(
+                index::RW_SYMVAL_BYHANDLE,
+                index_offset,
+                &mut [],
+                &write_data,
+            )
+            .await?;
 
         Ok(())
     }
@@ -220,14 +179,14 @@ impl AdsClient {
         let mut read_data = Value::default();
         let write_data = params.into_data();
 
-        read_write_exact(
-            &self.core_client,
-            RW_SYMVAL_BYHANDLE,
-            index_offset,
-            read_data.as_mut_bytes(),
-            &write_data,
-        )
-        .await?;
+        self.core_client
+            .read_write_exact(
+                index::RW_SYMVAL_BYHANDLE,
+                index_offset,
+                read_data.as_mut_bytes(),
+                &write_data,
+            )
+            .await?;
 
         Ok(read_data)
     }
@@ -236,7 +195,7 @@ impl AdsClient {
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
         &mut self,
         symbol: &str,
-    ) -> Result<NotificationSubscription<T>> {
+    ) -> Result<NotificationSubscription<T, impl Fn(Bytes) -> T + Send + Sync + 'static>> {
         let size = T::size();
         let from_bytes = |payload| {
             // TODO(mw): Do we need to handle this failure better?
@@ -250,7 +209,9 @@ impl AdsClient {
         &mut self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
-    ) -> Result<NotificationSubscription<SymbolTree>> {
+    ) -> Result<
+        NotificationSubscription<SymbolTree, impl Fn(Bytes) -> SymbolTree + Send + Sync + 'static>,
+    > {
         let size = symbol_type_tree.get_size();
         let from_bytes = move |payload| SymbolTree::from_bytes(payload, &symbol_type_tree, 0);
         self.subscribe_inner(symbol, size, from_bytes).await
@@ -261,19 +222,24 @@ impl AdsClient {
         &mut self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
-    ) -> Result<NotificationSubscription<SymbolMap>> {
+    ) -> Result<
+        NotificationSubscription<SymbolMap, impl Fn(Bytes) -> SymbolMap + Send + Sync + 'static>,
+    > {
         let size = symbol_type_tree.get_size();
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, String::new());
         let from_bytes = move |payload| SymbolMap::from_bytes(payload, &symbol_type_map);
         self.subscribe_inner(symbol, size, from_bytes).await
     }
 
-    async fn subscribe_inner<T: Send + Sync + 'static>(
+    async fn subscribe_inner<T: Send + Sync + 'static, FromBytesFn>(
         &mut self,
         symbol: &str,
         size: usize,
-        from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
-    ) -> Result<NotificationSubscription<T>> {
+        from_bytes: FromBytesFn,
+    ) -> Result<NotificationSubscription<T, FromBytesFn>>
+    where
+        FromBytesFn: Fn(Bytes) -> T + Send + Sync + 'static,
+    {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
         let attributes = NotificationAttributes {
@@ -285,97 +251,16 @@ impl AdsClient {
             cycle_time: Duration::from_millis(10),
         };
 
-        let (notification_tx, notification_rx) = mpsc::unbounded_channel();
-        let callback = move |_handle, _timestamp, payload| {
-            let data = from_bytes(payload);
-            // TODO(mw): Should we handle this error?
-            let _ = notification_tx.send(data);
-        };
-
-        self.core_client
-            .add_notification(
-                RW_SYMVAL_BYHANDLE,
-                index_offset,
-                &attributes,
-                &mut ads_handle,
-                callback,
-            )
+        let core_subscription = self
+            .core_client
+            .add_notification(index::RW_SYMVAL_BYHANDLE, index_offset, &attributes)
             .await?;
 
-        let handle = NotificationHandle::new(ads_handle);
-
-        self.notification_handles.push(handle.clone());
-
         let subscription = NotificationSubscription {
-            receiver: notification_rx,
-            handle,
+            core_subscription,
+            from_bytes,
         };
 
         Ok(subscription)
-    }
-
-    /// Unsubscribe from a notification subscription.
-    pub async fn unsubscribe<T>(&self, subscription: NotificationSubscription<T>) -> Result<()> {
-        self.unsubscribe_handle(&subscription.handle).await
-    }
-
-    /// Deletes all ongoing notification subscriptions.
-    pub async fn unsubscribe_all(&mut self) -> Result<()> {
-        for notification_handle in &self.notification_handles {
-            self.unsubscribe_handle(notification_handle).await?;
-        }
-
-        self.notification_handles.clear();
-
-        Ok(())
-    }
-
-    async fn unsubscribe_handle(&self, handle: &NotificationHandle) -> Result<()> {
-        handle.cancel();
-
-        self.core_client
-            .delete_device_notification(handle.ads_handle)
-            .await?;
-
-        Ok(())
-    }
-}
-
-pub(crate) async fn read_exact(
-    core_client: &ads::Client,
-    index_group: u32,
-    index_offset: u32,
-    data: &mut [u8],
-) -> Result<()> {
-    let len = core_client.read(index_group, index_offset, data).await?;
-    if len != data.len() as u32 {
-        Err(AdsError::Reply(
-            "read data",
-            "got less data than expected",
-            len as u32,
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-pub(crate) async fn read_write_exact(
-    core_client: &ads::Client,
-    index_group: u32,
-    index_offset: u32,
-    read_data: &mut [u8],
-    write_data: &[u8],
-) -> Result<()> {
-    let len = core_client
-        .read_write(index_group, index_offset, read_data, write_data)
-        .await?;
-    if len != read_data.len() as u32 {
-        Err(AdsError::Reply(
-            "read/write data",
-            "got less data than expected",
-            len as u32,
-        ))
-    } else {
-        Ok(())
     }
 }

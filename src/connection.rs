@@ -1,5 +1,5 @@
 use tokio::net::ToSocketAddrs;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::{core, AdsClient, AmsAddr, Error, Result, Timeouts};
 
@@ -44,10 +44,8 @@ impl AdsConnection {
 
     pub async fn disconnect(&mut self) -> Result<()> {
         match self {
-            AdsConnection::Connected(plc_client) => {
-                if let Err(error) = plc_client.unsubscribe_all().await {
-                    error!("Error unsubscribing on disconnect: {error}")
-                };
+            AdsConnection::Connected(_client) => {
+                // TODO: Double check that unsubscribe happens when connection is dropped
 
                 *self = AdsConnection::Disconnected;
 
@@ -64,14 +62,14 @@ impl AdsConnection {
     #[allow(dead_code)]
     pub fn client(&self) -> Option<&AdsClient> {
         match self {
-            AdsConnection::Connected(plc_client) => Some(plc_client),
+            AdsConnection::Connected(client) => Some(client),
             AdsConnection::Disconnected => None,
         }
     }
 
     pub fn client_mut(&mut self) -> Option<&mut AdsClient> {
         match self {
-            AdsConnection::Connected(plc_client) => Some(plc_client),
+            AdsConnection::Connected(client) => Some(client),
             AdsConnection::Disconnected => None,
         }
     }
