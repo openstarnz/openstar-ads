@@ -92,18 +92,19 @@ pub struct Client {
     source_port_opened: bool,
 
     /// TCP connection (duplicated with the reader)
-    socket_writer: OwnedWriteHalf,
+    socket_writer: Mutex<OwnedWriteHalf>,
 
     /// Current invoke ID (identifies the request/reply pair), incremented
     /// after each request
     invoke_id: AtomicU32,
+
     /// Active requests
     commands: PendingCommands,
     /// Subscriptions to notifications
     subscribers: NotificationSubscribers,
 
     /// IO receiver
-    receiver: ClientReceiver,
+    receiver: Mutex<ClientReceiver>,
 }
 
 impl Client {
@@ -210,11 +211,11 @@ impl Client {
                 target,
                 timeouts,
                 source_port_opened,
-                socket_writer,
+                socket_writer: Mutex::new(socket_writer),
                 invoke_id: AtomicU32::new(1),
                 commands,
                 subscribers,
-                receiver,
+                receiver: Mutex::new(receiver),
             }
         });
 
@@ -222,7 +223,7 @@ impl Client {
     }
 
     /// Read the device's name + version.
-    pub async fn read_device_info(&mut self) -> Result<DeviceInfo> {
+    pub async fn read_device_info(&self) -> Result<DeviceInfo> {
         let mut data = DeviceInfoRaw::new_zeroed();
 
         self.communicate(Command::DevInfo, &[], &mut [data.as_mut_bytes()])
@@ -247,7 +248,7 @@ impl Client {
     /// Read some data at a given index group/offset.  Returned data can be shorter than
     /// the buffer, the length is the return value.
     pub async fn read(
-        &mut self,
+        &self,
         index_group: u32,
         index_offset: u32,
         data: &mut [u8],
@@ -273,7 +274,7 @@ impl Client {
     /// Read some data at a given index group/offset, ensuring that the returned data has
     /// exactly the size of the passed buffer.
     pub async fn read_exact(
-        &mut self,
+        &self,
         index_group: u32,
         index_offset: u32,
         data: &mut [u8],
@@ -298,7 +299,7 @@ impl Client {
     /// Note: to be independent of the host's byte order, use the integer types
     /// defined in `zerocopy::byteorder`.
     pub async fn read_value<T: Default + IntoBytes + FromBytes>(
-        &mut self,
+        &self,
         index_group: u32,
         index_offset: u32,
     ) -> Result<T> {
@@ -309,7 +310,7 @@ impl Client {
     }
 
     /// Write some data to a given index group/offset.
-    pub async fn write(&mut self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
+    pub async fn write(&self, index_group: u32, index_offset: u32, data: &[u8]) -> Result<()> {
         let header = IndexLength {
             index_group: U32::new(index_group),
             index_offset: U32::new(index_offset),
@@ -324,7 +325,7 @@ impl Client {
     ///
     /// See `read_value` for details.
     pub async fn write_value<T: IntoBytes + Immutable>(
-        &mut self,
+        &self,
         index_group: u32,
         index_offset: u32,
         value: &T,
@@ -337,7 +338,7 @@ impl Client {
     /// reply from there.  This is not the same as a write() followed by read();
     /// it is used as a kind of RPC call.
     pub async fn read_write(
-        &mut self,
+        &self,
         index_group: u32,
         index_offset: u32,
         read_data: &mut [u8],
@@ -361,7 +362,7 @@ impl Client {
 
     /// Like `write_read`, but ensure the returned data length matches the output buffer.
     pub async fn read_write_exact(
-        &mut self,
+        &self,
         index_group: u32,
         index_offset: u32,
         read_data: &mut [u8],
@@ -381,7 +382,7 @@ impl Client {
     }
 
     /// Return the ADS and device state of the device.
-    pub async fn read_state(&mut self) -> Result<AdsStateInfo> {
+    pub async fn read_state(&self) -> Result<AdsStateInfo> {
         let mut state = ReadState::new_zeroed();
 
         self.communicate(Command::ReadState, &[], &mut [state.as_mut_bytes()])
@@ -400,7 +401,7 @@ impl Client {
     }
 
     /// (Try to) set the ADS and device state of the device.
-    pub async fn write_control(&mut self, ads_state: AdsState, dev_state: u16) -> Result<()> {
+    pub async fn write_control(&self, ads_state: AdsState, dev_state: u16) -> Result<()> {
         let data = WriteControl {
             ads_state: U16::new(ads_state as _),
             dev_state: U16::new(dev_state),
@@ -418,7 +419,7 @@ impl Client {
     /// the return value specifies the number of total valid bytes.  It is up to
     /// the caller to determine what this means in terms of the passed buffers.
     pub async fn communicate(
-        &mut self,
+        &self,
         cmd: Command,
         payload_bufs: &[&[u8]],
         result_bufs: &mut [&mut [u8]],
@@ -462,13 +463,17 @@ impl Client {
         self.insert_pending_command(dispatched_invoke_id, resp_tx)
             .await;
 
-        if let Some(timeout) = self.timeouts.write {
-            let result: TimeoutResult<io::Result<_>> =
-                tokio::time::timeout(timeout, self.socket_writer.write_all(&request_buf)).await;
-            result.ctx("dispatching assembled command payload (with timeout)")?;
-        } else {
-            let result: io::Result<_> = self.socket_writer.write_all(&request_buf).await;
-            result.ctx("dispatching assembled command payload")?;
+        {
+            let mut writer: MutexGuard<OwnedWriteHalf> = self.socket_writer.lock().await;
+
+            if let Some(timeout) = self.timeouts.write {
+                let result: TimeoutResult<io::Result<_>> =
+                    tokio::time::timeout(timeout, writer.write_all(&request_buf)).await;
+                result.ctx("dispatching assembled command payload (with timeout)")?;
+            } else {
+                let result: io::Result<_> = writer.write_all(&request_buf).await;
+                result.ctx("dispatching assembled command payload")?;
+            }
         }
 
         let (resp_header, resp_buf) = match self.timeouts.read {
@@ -627,7 +632,7 @@ impl Client {
     /// If the notification is not deleted explictly using `delete_notification`
     /// and the `Handle`, it is deleted when the `Client` object is dropped.
     pub async fn add_notification(
-        &mut self,
+        &self,
         index_group: u32,
         index_offset: u32,
         attributes: &notification::NotificationAttributes,
@@ -659,7 +664,7 @@ impl Client {
     }
 
     /// Delete a notification with given handle.
-    pub async fn delete_notification(&mut self, handle: NotificationHandle) -> Result<()> {
+    pub async fn delete_notification(&self, handle: NotificationHandle) -> Result<()> {
         self.communicate(
             Command::DeleteNotification,
             &[U32::new(handle).as_bytes()],
@@ -675,27 +680,33 @@ impl Client {
         Ok(())
     }
 
-    pub async fn close(&mut self) {
+    pub async fn close(&self) {
         // Delete all active notifications.
         {
-            let subscribers = self.subscribers.clone();
-            let subscribers = subscribers.lock().await;
+            let subscribers = self.subscribers.lock().await;
             for handle in subscribers.keys() {
                 let _ = self.delete_notification(*handle).await;
             }
         }
 
-        // Remove our port from the router, if necessary.
-        if self.source_port_opened {
-            let mut msg = [1, 0, 2, 0, 0, 0, 0, 0];
-            LE::write_u16(&mut msg[6..], self.source.port());
-            let _ = self.socket_writer.write_all(&msg).await;
+        {
+            let mut socket = self.socket_writer.lock().await;
+
+            // Remove our port from the router, if necessary.
+            if self.source_port_opened {
+                let mut msg = [1, 0, 2, 0, 0, 0, 0, 0];
+                LE::write_u16(&mut msg[6..], self.source.port());
+                let _ = socket.write_all(&msg).await;
+            }
+
+            let _ = socket.shutdown().await;
         }
 
-        let _ = self.socket_writer.shutdown().await;
-
         // Stop the recevier task.
-        let _ = self.receiver.stop().await;
+        {
+            let mut receiver = self.receiver.lock().await;
+            let _ = receiver.stop().await;
+        }
     }
 }
 
@@ -732,6 +743,9 @@ impl ClientReceiver {
                 subscribers.clone(),
             )
             .await;
+
+            // TODO
+            // let _ = socket.shutdown(Shutdown::Both);
 
             let mut commands = commands.lock().await;
             let keys = commands.keys().cloned().collect_vec();
