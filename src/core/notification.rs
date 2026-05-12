@@ -4,11 +4,8 @@ use std::io;
 use std::time::Duration;
 
 use byteorder::{ReadBytesExt, LE};
-use bytes::Bytes;
-use tokio::sync::mpsc;
 
 use crate::core::protocol::ADS_HEADER_SIZE;
-use crate::core::Client;
 use crate::error::ErrContext;
 use crate::{Error, Result};
 
@@ -129,37 +126,6 @@ impl Notification {
         }
     }
 }
-
-#[derive(Debug)]
-pub struct NotificationSubscription<'a> {
-    receiver: mpsc::Receiver<Bytes>,
-    handle: NotificationHandle,
-    client: &'a Client,
-}
-
-impl<'a> NotificationSubscription<'a> {
-    pub fn new(
-        receiver: mpsc::Receiver<Bytes>,
-        handle: NotificationHandle,
-        client: &'a Client,
-    ) -> Self {
-        Self {
-            receiver,
-            handle,
-            client,
-        }
-    }
-
-    pub fn handle(&self) -> NotificationHandle {
-        self.handle
-    }
-
-    pub async fn recv(&mut self) -> Option<Bytes> {
-        self.receiver.recv().await
-    }
-}
-
-// TODO impl Drop for NotificationSubscription
 
 /// A single sample in a notification message.
 #[derive(Clone, Debug, PartialEq, Eq)]

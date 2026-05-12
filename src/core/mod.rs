@@ -8,8 +8,7 @@ mod strings;
 pub use self::client::{Client, Timeouts};
 pub use self::netid::{AmsAddr, AmsNetId, AmsPort};
 pub(crate) use self::notification::{
-    NotificationAttributes, NotificationHandle, NotificationSubscription,
-    NotificationTransmissionMode,
+    NotificationAttributes, NotificationHandle, NotificationTransmissionMode,
 };
 pub use self::protocol::{AdsState, DeviceInfo};
 

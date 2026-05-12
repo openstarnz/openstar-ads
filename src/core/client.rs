@@ -4,7 +4,7 @@ use std::{
     net::Shutdown,
     sync::{
         atomic::{AtomicU32, Ordering},
-        Arc,
+        Arc, Weak,
     },
     time::Duration,
 };
@@ -105,7 +105,7 @@ pub struct Client {
     subscribers: NotificationSubscribers,
 
     /// IO receiver
-    _receiver: ClientReceiver,
+    receiver: ClientReceiver,
 }
 
 impl Drop for Client {
@@ -144,7 +144,7 @@ impl Client {
         target: AmsAddr,
         source: Option<AmsAddr>,
         timeouts: Timeouts,
-    ) -> Result<Self> {
+    ) -> Result<Arc<Self>> {
         let mut socket: TcpStream = if let Some(timeout) = timeouts.connect {
             let result: TimeoutResult<io::Result<TcpStream>> =
                 tokio::time::timeout(timeout, TcpStream::connect(router_addr)).await;
@@ -211,22 +211,25 @@ impl Client {
         let commands = Arc::new(Mutex::new(BTreeMap::new()));
         let subscribers = Arc::new(Mutex::new(BTreeMap::new()));
 
-        // Start the reader thread.
-        let mut receiver = ClientReceiver::default();
+        let client = Arc::new_cyclic(|weak| {
+            let mut receiver = ClientReceiver::new(weak.clone());
 
-        receiver.start(socket_reader, source, commands.clone(), subscribers.clone());
+            receiver.start(socket_reader, source, commands.clone(), subscribers.clone());
 
-        Ok(Client {
-            source,
-            target,
-            timeouts,
-            source_port_opened,
-            socket_writer: Mutex::new(socket_writer),
-            invoke_id: AtomicU32::new(1),
-            commands,
-            subscribers,
-            _receiver: receiver,
-        })
+            Client {
+                source,
+                target,
+                timeouts,
+                source_port_opened,
+                socket_writer: Mutex::new(socket_writer),
+                invoke_id: AtomicU32::new(1),
+                commands,
+                subscribers,
+                receiver,
+            }
+        });
+
+        Ok(client)
     }
 
     /// Read the device's name + version.
@@ -643,7 +646,7 @@ impl Client {
         index_group: u32,
         index_offset: u32,
         attributes: &notification::NotificationAttributes,
-    ) -> Result<NotificationSubscription> {
+    ) -> Result<(mpsc::Receiver<Bytes>, NotificationHandle)> {
         let data = AddNotif {
             index_group: U32::new(index_group),
             index_offset: U32::new(index_offset),
@@ -667,7 +670,7 @@ impl Client {
             subscribers.insert(handle.get(), sender);
         }
 
-        Ok(NotificationSubscription::new(receiver, handle.get(), self))
+        Ok((receiver, handle.get()))
     }
 
     /// Delete a notification with given handle.
@@ -690,12 +693,20 @@ impl Client {
 
 // Implementation detail: reader thread that takes replies and notifications
 // and distributes them accordingly.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ClientReceiver {
+    client: Weak<Client>,
     handle: Option<JoinHandle<Result<()>>>,
 }
 
 impl ClientReceiver {
+    fn new(client: Weak<Client>) -> Self {
+        Self {
+            client,
+            handle: Default::default(),
+        }
+    }
+
     fn start(
         &mut self,
         mut socket: OwnedReadHalf,
@@ -703,9 +714,16 @@ impl ClientReceiver {
         commands: PendingCommands,
         subscribers: NotificationSubscribers,
     ) {
+        let client = self.client.clone();
         let rx_worker = tokio::spawn(async move {
-            let result =
-                Self::reader_work(&mut socket, source, commands.clone(), subscribers.clone()).await;
+            let result = Self::reader_work(
+                client,
+                &mut socket,
+                source,
+                commands.clone(),
+                subscribers.clone(),
+            )
+            .await;
 
             // TODO
             // let _ = socket.shutdown(Shutdown::Both);
@@ -735,6 +753,7 @@ impl ClientReceiver {
     }
 
     async fn reader_work(
+        client: Weak<Client>,
         socket_rx: &mut OwnedReadHalf,
         source: AmsAddr,
         commands: PendingCommands,
@@ -850,16 +869,26 @@ impl ClientReceiver {
                 if let Ok(notif) = notification::Notification::new(
                     [ads_header_buf.as_slice(), &payload_buf].concat(),
                 ) {
-                    let mut subscribers = subscribers.lock().await;
-                    for sample in notif.samples() {
-                        if let Some(subscriber) = subscribers.get(&sample.handle) {
-                            // When you can't send, that means the receiver is gone.
-                            if let Err(_error) =
-                                subscriber.send(Bytes::copy_from_slice(sample.data)).await
-                            {
-                                // So remove from subscribers
-                                subscribers.remove(&sample.handle);
+                    let mut dropped_subscribers = Vec::<NotificationHandle>::new();
+
+                    {
+                        let subscribers = subscribers.lock().await;
+                        for sample in notif.samples() {
+                            if let Some(subscriber) = subscribers.get(&sample.handle) {
+                                // When you can't send, that means the receiver is gone.
+                                if let Err(_error) =
+                                    subscriber.send(Bytes::copy_from_slice(sample.data)).await
+                                {
+                                    // So remove from subscribers
+                                    dropped_subscribers.push(sample.handle);
+                                }
                             }
+                        }
+                    }
+
+                    if let Some(client) = client.upgrade() {
+                        for handle in dropped_subscribers {
+                            client.delete_notification(handle);
                         }
                     }
                 }
