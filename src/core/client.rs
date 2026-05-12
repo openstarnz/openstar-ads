@@ -28,7 +28,7 @@ use zerocopy::{
 
 use crate::{
     core::{
-        notification::{self, NotificationSubscription},
+        notification,
         protocol::{
             AddNotif, AdsHeader, AdsStateInfo, Command, DeviceInfo, DeviceInfoRaw, IndexLength,
             IndexLengthRW, ReadState, WriteControl, ADS_HEADER_SIZE, AMS_HEADER_SIZE,
@@ -105,7 +105,7 @@ pub struct Client {
     subscribers: NotificationSubscribers,
 
     /// IO receiver
-    receiver: ClientReceiver,
+    _receiver: ClientReceiver,
 }
 
 impl Drop for Client {
@@ -225,7 +225,7 @@ impl Client {
                 invoke_id: AtomicU32::new(1),
                 commands,
                 subscribers,
-                receiver,
+                _receiver: receiver,
             }
         });
 
@@ -888,7 +888,8 @@ impl ClientReceiver {
 
                     if let Some(client) = client.upgrade() {
                         for handle in dropped_subscribers {
-                            client.delete_notification(handle);
+                            // TODO: Do we need to handle these errors?
+                            let _ = client.delete_notification(handle).await;
                         }
                     }
                 }

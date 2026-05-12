@@ -1,5 +1,6 @@
 use bytes::Bytes;
-use std::{collections::HashMap, fmt::Debug, time::Duration};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
@@ -17,22 +18,22 @@ impl SymbolHandle {
     }
 }
 
-pub struct NotificationSubscription<'a, T> {
+pub struct NotificationSubscription<T> {
     from_bytes: Box<dyn Fn(Bytes) -> T + Send + Sync + 'static>,
-    core_subscription: core::NotificationSubscription<'a>,
+    receiver: mpsc::Receiver<Bytes>,
 }
 
-impl<T> Debug for NotificationSubscription<'_, T> {
+impl<T> Debug for NotificationSubscription<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NotificaionSubscription")
-            .field("core_subscription", &self.core_subscription)
+            .field("receiver", &self.receiver)
             .finish_non_exhaustive()
     }
 }
 
-impl<'a, T> NotificationSubscription<'a, T> {
+impl<T> NotificationSubscription<T> {
     pub async fn recv(&mut self) -> Option<T> {
-        self.core_subscription
+        self.receiver
             .recv()
             .await
             .map(|bytes| (self.from_bytes)(bytes))
@@ -40,13 +41,13 @@ impl<'a, T> NotificationSubscription<'a, T> {
 }
 
 pub struct AdsClient {
-    core_client: core::Client,
+    core_client: Arc<core::Client>,
     symbol_handles: HashMap<String, SymbolHandle>,
 }
 
 /// Provides a more user friendly wrapper to interact with the OpenStar PLC's.
 impl AdsClient {
-    pub fn new(core_client: core::Client) -> Self {
+    pub fn new(core_client: Arc<core::Client>) -> Self {
         Self {
             core_client,
             symbol_handles: Default::default(),
@@ -247,13 +248,13 @@ impl AdsClient {
             cycle_time: Duration::from_millis(10),
         };
 
-        let core_subscription = self
+        let (receiver, _handle) = self
             .core_client
             .add_notification(index::RW_SYMVAL_BYHANDLE, index_offset, &attributes)
             .await?;
 
         let subscription = NotificationSubscription {
-            core_subscription,
+            receiver,
             from_bytes: Box::new(from_bytes),
         };
 
