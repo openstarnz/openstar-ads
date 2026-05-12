@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     io,
-    net::Shutdown,
     sync::{
         atomic::{AtomicU32, Ordering},
         Arc, Weak,
@@ -105,16 +104,7 @@ pub struct Client {
     subscribers: NotificationSubscribers,
 
     /// IO receiver
-    _receiver: ClientReceiver,
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        // TODO: Delete all active notifications
-        // TODO: Remove our port from the router, if necessary
-        // TODO: Shutdown the socket
-        // TODO: Stop the receiver
-    }
+    receiver: Mutex<ClientReceiver>,
 }
 
 impl Client {
@@ -225,7 +215,7 @@ impl Client {
                 invoke_id: AtomicU32::new(1),
                 commands,
                 subscribers,
-                _receiver: receiver,
+                receiver: Mutex::new(receiver),
             }
         });
 
@@ -689,6 +679,35 @@ impl Client {
 
         Ok(())
     }
+
+    pub async fn close(&self) {
+        // Delete all active notifications.
+        {
+            let subscribers = self.subscribers.lock().await;
+            for handle in subscribers.keys() {
+                let _ = self.delete_notification(*handle).await;
+            }
+        }
+
+        {
+            let mut socket = self.socket_writer.lock().await;
+
+            // Remove our port from the router, if necessary.
+            if self.source_port_opened {
+                let mut msg = [1, 0, 2, 0, 0, 0, 0, 0];
+                LE::write_u16(&mut msg[6..], self.source.port());
+                let _ = socket.write_all(&msg).await;
+            }
+
+            let _ = socket.shutdown().await;
+        }
+
+        // Stop the recevier task.
+        {
+            let mut receiver = self.receiver.lock().await;
+            let _ = receiver.stop().await;
+        }
+    }
 }
 
 // Implementation detail: reader thread that takes replies and notifications
@@ -750,6 +769,14 @@ impl ClientReceiver {
         });
 
         let _ = self.handle.insert(rx_worker);
+    }
+
+    pub async fn stop(&mut self) -> Option<Result<()>> {
+        if let Some(handle) = self.handle.take() {
+            handle.await.ok()
+        } else {
+            None
+        }
     }
 
     async fn reader_work(
@@ -894,14 +921,6 @@ impl ClientReceiver {
                     }
                 }
             }
-        }
-    }
-}
-
-impl Drop for ClientReceiver {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            tokio::spawn(handle);
         }
     }
 }

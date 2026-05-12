@@ -260,4 +260,8 @@ impl AdsClient {
 
         Ok(subscription)
     }
+
+    pub async fn close(&self) {
+        self.core_client.close().await
+    }
 }

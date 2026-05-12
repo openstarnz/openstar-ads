@@ -44,8 +44,8 @@ impl AdsConnection {
 
     pub async fn disconnect(&mut self) -> Result<()> {
         match self {
-            AdsConnection::Connected(_client) => {
-                // TODO: Double check that unsubscribe happens when connection is dropped
+            AdsConnection::Connected(client) => {
+                client.close().await;
 
                 *self = AdsConnection::Disconnected;
 
