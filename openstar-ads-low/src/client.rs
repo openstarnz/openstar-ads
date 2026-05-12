@@ -30,7 +30,7 @@ use crate::{
     errors::{ErrContext, ads_error},
     notif,
     protocol::{
-        ADS_HEADER_SIZE, AMS_HEADER_SIZE, AdsHeader, Command, IndexLength, IndexLengthRW,
+        ADS_HEADER_SIZE, AMS_HEADER_SIZE, AddNotif, AdsHeader, Command, IndexLength, IndexLengthRW,
         ReadState, WriteControl,
     },
 };
@@ -650,6 +650,64 @@ impl Client {
 
     async fn discard_pending_command(&self, id: &u32) {
         self.commands.lock().await.remove_entry(id);
+    }
+
+    /// Add a notification handle for some index group/offset.
+    ///
+    /// Notifications are delivered via a MPMC channel whose reading end can be
+    /// obtained from `get_notification_channel` on the `Client` object.
+    /// The returned `Handle` can be used to check which notification has fired.
+    ///
+    /// If the notification is not deleted explictly using `delete_notification`
+    /// and the `Handle`, it is deleted when the `Client` object is dropped.
+    pub async fn add_notification(
+        &self,
+        index_group: u32,
+        index_offset: u32,
+        attributes: &notif::Attributes,
+    ) -> Result<(notif::Handle, mpsc::Receiver<Bytes>)> {
+        let data = AddNotif {
+            index_group: U32::new(index_group),
+            index_offset: U32::new(index_offset),
+            length: U32::new(attributes.length.try_into()?),
+            trans_mode: U32::new(attributes.trans_mode as u32),
+            max_delay: U32::new(attributes.max_delay.as_millis().try_into()?),
+            cycle_time: U32::new(attributes.cycle_time.as_millis().try_into()?),
+            reserved: [0; 16],
+        };
+        let mut handle = U32::new(0);
+        self.communicate(
+            Command::AddNotification,
+            &[data.as_bytes()],
+            &mut [handle.as_mut_bytes()],
+        )
+        .await?;
+
+        // u32, mpsc::Sender<Bytes>>>
+        let (sender, receiver) = mpsc::channel(32);
+        {
+            let mut subscribers = self.subscribers.lock().await;
+            subscribers.insert(handle.get(), sender);
+        }
+
+        Ok((handle.get(), receiver))
+    }
+
+    /// Delete a notification with given handle.
+    pub async fn delete_notification(&self, handle: notif::Handle) -> Result<()> {
+        self.communicate(
+            Command::DeleteNotification,
+            &[U32::new(handle).as_bytes()],
+            &mut [],
+        )
+        .await?;
+
+        {
+            let mut subscribers = self.subscribers.lock().await;
+            subscribers.remove(&handle);
+        }
+
+        Ok(())
     }
 }
 
