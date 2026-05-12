@@ -278,7 +278,7 @@ impl PrimitiveSymbolDescriptor {
                 String::from_utf8_lossy(&accessible_data.to_vec()[0..size]).to_string(),
             ),
             PrimitiveSymbolType::Bool => match u8::read_from(accessible_data) {
-                Some(num) => PrimitiveValue::Bool(num == 0),
+                Some(num) => PrimitiveValue::Bool(num != 0),
                 None => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Wstring(size) => {
