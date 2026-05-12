@@ -3,6 +3,7 @@
 mod ads;
 mod client;
 mod connection;
+pub mod core;
 mod data_types;
 mod error;
 mod params;

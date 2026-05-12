@@ -1,11 +1,10 @@
-use itertools::Itertools;
 use std::str::FromStr;
 use zerocopy::{
-    FromBytes, FromZeros, Immutable, IntoBytes,
     little_endian::{U16, U32},
+    FromBytes, Immutable, IntoBytes,
 };
 
-use crate::{AmsNetId, Result, errors::ads_error, notif};
+use crate::AmsNetId;
 
 /// Size of the AMS/TCP + AMS headers
 // https://infosys.beckhoff.com/content/1033/tc3_ads_intro/115845259.html?id=6032227753916597086

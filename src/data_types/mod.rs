@@ -15,13 +15,19 @@ use std::fmt::Debug;
 use bytes::Bytes;
 
 pub trait AdsData:
-    Clone + Debug + Default + zerocopy::AsBytes + zerocopy::FromBytes + zerocopy::FromZeroes
+    Clone
+    + Debug
+    + Default
+    + zerocopy::Immutable
+    + zerocopy::IntoBytes
+    + zerocopy::FromBytes
+    + zerocopy::FromZeros
 {
     fn size() -> usize {
         std::mem::size_of::<Self>()
     }
 
     fn from_bytes(bytes: Bytes) -> Option<Self> {
-        Self::read_from(&bytes)
+        Self::read_from_bytes(&bytes).ok()
     }
 }

@@ -2,7 +2,7 @@ use crate::data_types::AdsData;
 
 use super::udint::AdsUdint;
 
-#[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
+#[derive(Clone, Debug, Default, zerocopy::Immutable, zerocopy::IntoBytes, zerocopy::FromBytes)]
 #[repr(C)]
 pub struct AdsTime(AdsUdint);
 

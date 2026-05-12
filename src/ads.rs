@@ -1,4 +1,3 @@
-use ads_client::{self as ads};
 use std::{net::Ipv4Addr, sync::Arc, time::Duration};
 use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
 use tracing::{error, info, warn};

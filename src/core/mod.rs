@@ -1,5 +1,4 @@
 pub mod client;
-pub mod errors;
 pub mod index;
 pub mod netid;
 pub mod notif;
@@ -7,7 +6,6 @@ pub mod protocol;
 pub mod strings;
 
 pub use client::{Client, ClientBuilder, Timeouts};
-pub use errors::{Error, Result};
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
 pub use protocol::AdsState;
 

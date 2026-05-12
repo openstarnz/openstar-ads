@@ -1,12 +1,11 @@
-use thiserror::Error;
 /**
  * A latin-1 16 Character String for Beckhoff ADS. Includes a 0 for null termination.
  */
-use zerocopy::FromZeroes;
-
 use crate::data_types::AdsData;
+use thiserror::Error;
+use zerocopy::FromZeros;
 
-#[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
+#[derive(Clone, Debug, Default, zerocopy::Immutable, zerocopy::IntoBytes, zerocopy::FromBytes)]
 #[repr(C)]
 pub struct AdsString16 {
     inner: [u8; 16],

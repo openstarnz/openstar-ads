@@ -265,13 +265,14 @@ impl SymbolTypeMapExt for SymbolTypeMap {
 
 impl PrimitiveSymbolDescriptor {
     fn datetime_from_bytes(offsets: [usize; 8], bytes: &[u8]) -> Option<DateTime<Utc>> {
-        let year = u16::read_from_prefix(&bytes[offsets[0]..])?;
-        let month = u16::read_from_prefix(&bytes[offsets[1]..])?;
-        let day = u16::read_from_prefix(&bytes[offsets[3]..])?;
-        let hour = u16::read_from_prefix(&bytes[offsets[4]..])?;
-        let minute = u16::read_from_prefix(&bytes[offsets[5]..])?;
-        let second = u16::read_from_prefix(&bytes[offsets[6]..])?;
-        let milliseconds = u16::read_from_prefix(&bytes[offsets[7]..])?;
+        // TODO: Should this function now return a zerocopy::error::SizeError?
+        let (year, _) = u16::read_from_prefix(&bytes[offsets[0]..]).ok()?;
+        let (month, _) = u16::read_from_prefix(&bytes[offsets[1]..]).ok()?;
+        let (day, _) = u16::read_from_prefix(&bytes[offsets[3]..]).ok()?;
+        let (hour, _) = u16::read_from_prefix(&bytes[offsets[4]..]).ok()?;
+        let (minute, _) = u16::read_from_prefix(&bytes[offsets[5]..]).ok()?;
+        let (second, _) = u16::read_from_prefix(&bytes[offsets[6]..]).ok()?;
+        let (milliseconds, _) = u16::read_from_prefix(&bytes[offsets[7]..]).ok()?;
 
         NaiveDate::from_ymd_opt(year.into(), month.into(), day.into()).and_then(|date| {
             date.and_hms_milli_opt(
@@ -294,51 +295,51 @@ impl PrimitiveSymbolDescriptor {
                 }
             }
             PrimitiveSymbolType::Real => match f32::read_from_prefix(accessible_data) {
-                Some(float) => PrimitiveValue::Float(float as f64),
-                None => PrimitiveValue::Malformed,
+                Ok((float, _)) => PrimitiveValue::Float(float as f64),
+                Err(_rror) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Lreal => match f64::read_from_prefix(accessible_data) {
-                Some(float) => PrimitiveValue::Float(float),
-                None => PrimitiveValue::Malformed,
+                Ok((float, _)) => PrimitiveValue::Float(float),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Sint => match i8::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer as i64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Int => match i16::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer as i64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Dint => match i32::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer as i64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Lint => match i64::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Usint => match u8::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger as u64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Uint => match u16::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger as u64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Udint => match u32::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger as u64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Ulint => match u64::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::String(size) => PrimitiveValue::String(
                 String::from_utf8_lossy(&accessible_data.to_vec()[0..size]).to_string(),
             ),
-            PrimitiveSymbolType::Bool => match u8::read_from(accessible_data) {
-                Some(num) => PrimitiveValue::Bool(num == 0),
-                None => PrimitiveValue::Malformed,
+            PrimitiveSymbolType::Bool => match u8::read_from_prefix(accessible_data) {
+                Ok((num, _)) => PrimitiveValue::Bool(num != 0),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Wstring(size) => {
                 if size % 2 != 0 {
@@ -346,7 +347,7 @@ impl PrimitiveSymbolDescriptor {
                 }
                 let mut words = Vec::new();
                 for i in (0..size).step_by(2) {
-                    let Some(word) = u16::read_from(&accessible_data[i..i + 2]) else {
+                    let Ok(word) = u16::read_from_bytes(&accessible_data[i..i + 2]) else {
                         // If there is somehow not enough bytes in the data then the data is malformed.
                         return PrimitiveValue::Malformed;
                     };

@@ -4,7 +4,7 @@ use crate::data_types::AdsData;
 
 use super::word::AdsWord;
 
-#[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
+#[derive(Clone, Debug, Default, zerocopy::Immutable, zerocopy::IntoBytes, zerocopy::FromBytes)]
 #[repr(C)]
 pub struct AdsTimeStruct {
     year: AdsWord,         // wYear: the year: 1970 ~ 2106;

@@ -1,6 +1,6 @@
 use crate::data_types::AdsData;
 
-#[derive(Clone, Debug, Default, zerocopy::AsBytes, zerocopy::FromBytes, zerocopy::FromZeroes)]
+#[derive(Clone, Debug, Default, zerocopy::Immutable, zerocopy::IntoBytes, zerocopy::FromBytes)]
 #[repr(C)]
 pub struct AdsDint(i32);
 

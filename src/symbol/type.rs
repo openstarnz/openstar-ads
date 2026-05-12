@@ -1,23 +1,14 @@
-// Source: https://github.com/Simworx/ads-rs/blob/db7ff6ae2175298554daf37fc86340af4821583e/src/symbol.rs#L89-L748
-//
-// Changes:
-// - Added constants for necessary ADS index groups
-// - Updated `get_symbol_info`
-// - Updated `get_type_info_by_name`
+//! Wrappers for symbol operations and symbol handles.
 
-use ads_client as ads;
-use byteorder::{ByteOrder, ReadBytesExt, LE};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Read;
 
-use crate::{read_exact, AdsError, ErrContext, Result};
+use byteorder::{ByteOrder, ReadBytesExt, LE};
 
-// ADS index group constants
-const SYM_UPLOAD: u32 = 0xF00B;
-const SYM_DT_UPLOAD: u32 = 0xF00E;
-const SYM_UPLOAD_INFO2: u32 = 0xF00F;
-pub const GET_TYPEINFO_BYNAME_EX: u32 = 0xF011;
+use crate::core::{self, index};
+use crate::error::{ErrContext, Error};
+use crate::Result;
 
 /// Represents a symbol in the PLC memory.
 pub struct Symbol {
@@ -291,7 +282,7 @@ fn parse_method_infos(ptr: &mut &[u8]) -> Result<Vec<RpcMethod>> {
     for _ in 0..count {
         let entry_len = ptr.read_u32::<LE>().ctx(ctx)? as usize;
         if entry_len < 4 {
-            return Err(AdsError::Reply(
+            return Err(Error::Reply(
                 ctx,
                 "invalid method entry length",
                 entry_len as u32,
@@ -334,7 +325,7 @@ fn parse_rpc_method(mut ptr: &[u8]) -> Result<RpcMethod> {
     for _ in 0..param_count {
         let entry_len = ptr.read_u32::<LE>().ctx(ctx)? as usize;
         if entry_len < 4 {
-            return Err(AdsError::Reply(
+            return Err(Error::Reply(
                 ctx,
                 "invalid parameter entry length",
                 entry_len as u32,
@@ -450,20 +441,26 @@ pub type TypeMap = HashMap<String, Type>;
 ///
 /// Returns the symbol list and a [`TypeMap`] containing the full type
 /// inventory including fields, attributes, enum variants, and RPC methods.
-pub async fn get_symbol_info(ads_client: &ads::Client) -> Result<(Vec<Symbol>, TypeMap)> {
+pub async fn get_symbol_info(client: &core::Client) -> Result<(Vec<Symbol>, TypeMap)> {
     // AdsSymbolUploadInfo2 is 48 bytes, as per TcAdsDef.h
     // See also: https://github.com/hANSIc99/ads_client/issues/1#issuecomment-1807817117
     let mut read_data = [0; 48];
-    read_exact(ads_client, SYM_UPLOAD_INFO2, 0, &mut read_data).await?;
+    client
+        .read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)
+        .await?;
 
     let symbol_len = LE::read_u32(&read_data[4..]) as usize;
     let types_len = LE::read_u32(&read_data[12..]) as usize;
 
     let mut type_data = vec![0; types_len];
-    read_exact(ads_client, SYM_DT_UPLOAD, 0, &mut type_data).await?;
+    client
+        .read_exact(index::SYM_DT_UPLOAD, 0, &mut type_data)
+        .await?;
 
     let mut symbol_data = vec![0; symbol_len];
-    read_exact(ads_client, SYM_UPLOAD, 0, &mut symbol_data).await?;
+    client
+        .read_exact(index::SYM_UPLOAD, 0, &mut symbol_data)
+        .await?;
 
     decode_symbol_info(symbol_data, type_data)
 }
@@ -489,7 +486,7 @@ pub fn decode_symbol_info(
         let mut buf = [0; 1024];
         let version = ptr.read_u32::<LE>().ctx(ctx)?;
         if version != 1 {
-            return Err(AdsError::Reply(ctx, "unknown type info version", version));
+            return Err(Error::Reply(ctx, "unknown type info version", version));
         }
         let _subitem_index = ptr.read_u16::<LE>().ctx(ctx)?;
         let _plc_interface_id = ptr.read_u16::<LE>().ctx(ctx)?;
@@ -624,20 +621,19 @@ pub fn decode_symbol_info(
 ///
 /// Returns a fully parsed [`Type`] including GUID, attributes, enum infos,
 /// and RPC methods when present.
-pub async fn get_type_info_by_name(ads_client: &ads::Client, type_name: &str) -> Result<Type> {
+pub async fn get_type_info_by_name(client: &core::Client, type_name: &str) -> Result<Type> {
     let mut read_data = vec![0u8; 4096];
-    let n = ads_client
-        .read_write(
-            GET_TYPEINFO_BYNAME_EX,
+    let n = client
+        .write_read(
+            index::GET_TYPEINFO_BYNAME_EX,
             0,
-            &mut read_data,
             type_name.as_bytes(),
+            &mut read_data,
         )
         .await?;
-    let n = n as usize;
     let data = &read_data[..n];
     if data.len() < 4 {
-        return Err(AdsError::Reply(
+        return Err(Error::Reply(
             "get type info by name",
             "response too short",
             data.len() as u32,
@@ -724,7 +720,7 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
             for _ in 0..sub_item_count {
                 let sub_size = ptr.read_u32::<LE>().ctx(ctx)? as usize;
                 if sub_size < 4 {
-                    return Err(AdsError::Reply(
+                    return Err(Error::Reply(
                         ctx,
                         "invalid sub-item entry length",
                         sub_size as u32,
@@ -741,5 +737,5 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
         }
     }
 
-    decode_entry(data, None)?.ok_or(AdsError::Other("expected top-level type".to_owned()))
+    decode_entry(data, None)?.ok_or(Error::Other("expected top-level type"))
 }

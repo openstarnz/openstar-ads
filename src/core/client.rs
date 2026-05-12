@@ -3,8 +3,8 @@ use std::{
     io,
     net::{Ipv4Addr, Shutdown},
     sync::{
-        Arc,
         atomic::{AtomicU32, Ordering},
+        Arc,
     },
     time::Duration,
 };
@@ -15,25 +15,28 @@ use itertools::Itertools;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
-        TcpStream, ToSocketAddrs,
         tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream, ToSocketAddrs,
     },
-    sync::{Mutex, MutexGuard, mpsc, oneshot},
+    sync::{mpsc, oneshot, Mutex, MutexGuard},
     task::JoinHandle,
 };
 use zerocopy::{
-    FromBytes, FromZeros, Immutable, IntoBytes,
     little_endian::{U16, U32},
+    FromBytes, FromZeros, Immutable, IntoBytes,
 };
 
 use crate::{
-    AdsState, AmsAddr, AmsNetId, Error, Result,
-    errors::{ErrContext, ads_error},
-    notif,
-    protocol::{
-        ADS_HEADER_SIZE, AMS_HEADER_SIZE, AddNotif, AdsHeader, Command, IndexLength, IndexLengthRW,
-        ReadState, WriteControl,
+    core::{
+        notif,
+        protocol::{
+            AddNotif, AdsHeader, Command, IndexLength, IndexLengthRW, ReadState, WriteControl,
+            ADS_HEADER_SIZE, AMS_HEADER_SIZE,
+        },
+        AdsState, AmsAddr, AmsNetId,
     },
+    error::{ads_error, ErrContext},
+    Error, Result,
 };
 
 #[derive(Debug, Clone)]

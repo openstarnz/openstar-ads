@@ -3,10 +3,10 @@
 use std::io;
 use std::time::Duration;
 
-use byteorder::{LE, ReadBytesExt};
+use byteorder::{ReadBytesExt, LE};
 
-use crate::errors::ErrContext;
-use crate::protocol::ADS_HEADER_SIZE;
+use crate::core::protocol::ADS_HEADER_SIZE;
+use crate::error::ErrContext;
 use crate::{Error, Result};
 
 /// A handle to the notification; this can be used to delete the notification later.

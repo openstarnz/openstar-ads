@@ -71,44 +71,44 @@ impl SymbolTree {
             }
             SymbolTypeTree::Void(size) => Self::Void(accessible_data[0..*size].to_vec()),
             SymbolTypeTree::Int => match i16::read_from_prefix(accessible_data) {
-                Some(num) => Self::Int(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Int(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Dint => match i32::read_from_prefix(accessible_data) {
-                Some(num) => Self::Dint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Dint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Real => match f32::read_from_prefix(accessible_data) {
-                Some(num) => Self::Real(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Real(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Lreal => match f64::read_from_prefix(accessible_data) {
-                Some(num) => Self::Lreal(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Lreal(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Sint => match i8::read_from_prefix(accessible_data) {
-                Some(num) => Self::Sint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Sint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Usint => match u8::read_from_prefix(accessible_data) {
-                Some(num) => Self::Usint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Usint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Uint => match u16::read_from_prefix(accessible_data) {
-                Some(num) => Self::Uint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Uint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Udint => match u32::read_from_prefix(accessible_data) {
-                Some(num) => Self::Udint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Udint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Lint => match i64::read_from_prefix(accessible_data) {
-                Some(num) => Self::Lint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Lint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Ulint => match u64::read_from_prefix(accessible_data) {
-                Some(num) => Self::Ulint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Ulint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::String(size) => Self::String(
                 String::from_utf8_lossy(&accessible_data.to_vec()[0..*size]).to_string(),
@@ -119,7 +119,7 @@ impl SymbolTree {
                 }
                 let mut words = Vec::new();
                 for i in (0..*size).step_by(2) {
-                    let Some(word) = u16::read_from(&accessible_data[i..i + 2]) else {
+                    let Ok(word) = u16::read_from_bytes(&accessible_data[i..i + 2]) else {
                         // If there is somehow not enough bytes in the data then the data is malformed.
                         return Self::Malformed;
                     };
@@ -141,8 +141,8 @@ impl SymbolTree {
                 Self::Real80(extended::Extended::from_le_bytes(buffer).to_f64())
             }
             SymbolTypeTree::Bool => match u8::read_from_prefix(accessible_data) {
-                Some(num) => Self::Bool(num != 0),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Bool(num != 0),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Compound(_) => Self::Malformed,
             SymbolTypeTree::Unknown(_) => Self::Unknown,
