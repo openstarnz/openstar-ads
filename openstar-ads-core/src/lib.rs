@@ -5,13 +5,11 @@ pub mod netid;
 pub mod notif;
 pub mod protocol;
 pub mod strings;
-pub mod symbol;
 
 pub use client::{Client, ClientBuilder, Timeouts};
 pub use errors::{Error, Result};
 pub use netid::{AmsAddr, AmsNetId, AmsPort};
 pub use protocol::AdsState;
-pub use symbol::Handle;
 
 /// The default port for TCP communication.
 pub const PORT: u16 = 0xBF02;
