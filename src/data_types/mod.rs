@@ -132,4 +132,30 @@ mod tests {
 
         assert_eq!(symbol_map, expected);
     }
+
+    #[test]
+    fn test_boolean() {
+        let size = 12;
+        let mut numbers_symbol_map: IndexMap<String, (SymbolTypeTree, Option<u32>)> =
+            IndexMap::new();
+        let mut data: Vec<u8> = Vec::new();
+        numbers_symbol_map.insert("true".to_string(), (SymbolTypeTree::Bool, Some(0)));
+        numbers_symbol_map.insert("false".to_string(), (SymbolTypeTree::Bool, Some(1)));
+
+        data.append(&mut (1u8).to_le_bytes().to_vec());
+        data.append(&mut (0u8).to_le_bytes().to_vec());
+
+        let symbol_type_tree = SymbolTypeTree::Struct(numbers_symbol_map, size);
+
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
+
+        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+
+        let expected = indexmap::indexmap! {
+            "true".to_string() => PrimitiveValue::Bool(true),
+            "false".to_string() => PrimitiveValue::Bool(false),
+        };
+
+        assert_eq!(symbol_map, expected);
+    }
 }
