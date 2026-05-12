@@ -135,17 +135,17 @@ mod tests {
 
     #[test]
     fn test_boolean() {
-        let size = 12;
-        let mut numbers_symbol_map: IndexMap<String, (SymbolTypeTree, Option<u32>)> =
+        let size = 2;
+        let mut boolean_symbol_map: IndexMap<String, (SymbolTypeTree, Option<u32>)> =
             IndexMap::new();
         let mut data: Vec<u8> = Vec::new();
-        numbers_symbol_map.insert("true".to_string(), (SymbolTypeTree::Bool, Some(0)));
-        numbers_symbol_map.insert("false".to_string(), (SymbolTypeTree::Bool, Some(1)));
+        boolean_symbol_map.insert("true".to_string(), (SymbolTypeTree::Bool, Some(0)));
+        boolean_symbol_map.insert("false".to_string(), (SymbolTypeTree::Bool, Some(1)));
 
         data.append(&mut (1u8).to_le_bytes().to_vec());
         data.append(&mut (0u8).to_le_bytes().to_vec());
 
-        let symbol_type_tree = SymbolTypeTree::Struct(numbers_symbol_map, size);
+        let symbol_type_tree = SymbolTypeTree::Struct(boolean_symbol_map, size);
 
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
 
@@ -154,6 +154,92 @@ mod tests {
         let expected = indexmap::indexmap! {
             "true".to_string() => PrimitiveValue::Bool(true),
             "false".to_string() => PrimitiveValue::Bool(false),
+        };
+
+        assert_eq!(symbol_map, expected);
+    }
+
+    #[test]
+    fn test_strings() {
+        let size = 36;
+        let mut strings_symbol_map: IndexMap<String, (SymbolTypeTree, Option<u32>)> =
+            IndexMap::new();
+        let mut data: Vec<u8> = Vec::new();
+        strings_symbol_map.insert("utf8".to_string(), (SymbolTypeTree::String(11), Some(0)));
+        strings_symbol_map.insert("utf16".to_string(), (SymbolTypeTree::Wstring(24), Some(12)));
+
+        data.append(&mut "Test string".as_bytes().to_vec());
+        // Buffer byte for alignment
+        data.push(0u8);
+        data.append(
+            &mut "Test string!"
+                .encode_utf16()
+                .flat_map(|word| word.to_le_bytes())
+                .collect(),
+        );
+
+        let symbol_type_tree = SymbolTypeTree::Struct(strings_symbol_map, size);
+
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
+
+        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+
+        let expected = indexmap::indexmap! {
+            "utf8".to_string() => PrimitiveValue::String("Test string".to_string()),
+            "utf16".to_string() => PrimitiveValue::String("Test string!".to_string()),
+        };
+
+        assert_eq!(symbol_map, expected);
+    }
+
+    #[test]
+    fn test_reals() {
+        let size = 16;
+        let mut numbers_symbol_map: IndexMap<String, (SymbolTypeTree, Option<u32>)> =
+            IndexMap::new();
+        let mut data: Vec<u8> = Vec::new();
+        numbers_symbol_map.insert("f64".to_string(), (SymbolTypeTree::Lreal, Some(0)));
+        numbers_symbol_map.insert("f32".to_string(), (SymbolTypeTree::Real, Some(8)));
+
+        data.append(&mut 1.23f64.to_le_bytes().to_vec());
+        data.append(&mut 4.56f32.to_le_bytes().to_vec());
+
+        let symbol_type_tree = SymbolTypeTree::Struct(numbers_symbol_map, size);
+
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
+
+        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+
+        let expected = indexmap::indexmap! {
+            "f64".to_string() => PrimitiveValue::Float(1.23f64),
+            "f32".to_string() => PrimitiveValue::Float(4.56f32 as f64),
+        };
+
+        assert_eq!(symbol_map, expected);
+    }
+
+    #[test]
+    fn test_void() {
+        let size = 12;
+        let mut void_symbol_map: IndexMap<String, (SymbolTypeTree, Option<u32>)> = IndexMap::new();
+        let mut data: Vec<u8> = Vec::new();
+        void_symbol_map.insert("u128".to_string(), (SymbolTypeTree::Void(16), Some(0)));
+
+        // Designed to be bytes ascending from 1 to 16
+        data.append(
+            &mut 21345817372864405881847059188222722561u128
+                .to_le_bytes()
+                .to_vec(),
+        );
+
+        let symbol_type_tree = SymbolTypeTree::Struct(void_symbol_map, size);
+
+        let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
+
+        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+
+        let expected = indexmap::indexmap! {
+            "u128".to_string() => PrimitiveValue::Void(vec![1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8, 13u8, 14u8, 15u8, 16u8])
         };
 
         assert_eq!(symbol_map, expected);
