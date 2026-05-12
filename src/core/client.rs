@@ -850,10 +850,16 @@ impl ClientReceiver {
                 if let Ok(notif) = notification::Notification::new(
                     [ads_header_buf.as_slice(), &payload_buf].concat(),
                 ) {
-                    let subscribers = subscribers.lock().await;
+                    let mut subscribers = subscribers.lock().await;
                     for sample in notif.samples() {
                         if let Some(subscriber) = subscribers.get(&sample.handle) {
-                            let _ = subscriber.send(Bytes::copy_from_slice(sample.data)).await;
+                            // When you can't send, that means the receiver is gone.
+                            if let Err(_error) =
+                                subscriber.send(Bytes::copy_from_slice(sample.data)).await
+                            {
+                                // So remove from subscribers
+                                subscribers.remove(&sample.handle);
+                            }
                         }
                     }
                 }
