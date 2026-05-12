@@ -1,12 +1,11 @@
 use bytes::Bytes;
-use std::{collections::HashMap, time::Duration};
-use tokio::sync::mpsc;
+use std::{collections::HashMap, fmt::Debug, time::Duration};
 use tracing::{error, info};
 
 use crate::{
     core::{self, index, NotificationAttributes, NotificationTransmissionMode},
-    get_symbol_info, AdsData, AdsParams, AdsState, Error, Result, SymbolMap, SymbolMapExt,
-    SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
+    get_symbol_info, AdsData, AdsParams, AdsState, Result, SymbolMap, SymbolMapExt, SymbolTree,
+    SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -18,16 +17,20 @@ impl SymbolHandle {
     }
 }
 
-#[derive(Debug)]
-pub struct NotificationSubscription<'a, T, FromBytesFn: Fn(Bytes) -> T + Send + Sync + 'static> {
-    from_bytes: FromBytesFn,
+pub struct NotificationSubscription<'a, T> {
+    from_bytes: Box<dyn Fn(Bytes) -> T + Send + Sync + 'static>,
     core_subscription: core::NotificationSubscription<'a>,
 }
 
-impl<'a, T, FromBytesFn> NotificationSubscription<'a, T, FromBytesFn>
-where
-    FromBytesFn: Fn(Bytes) -> T + Send + Sync + 'static,
-{
+impl<T> Debug for NotificationSubscription<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NotificaionSubscription")
+            .field("core_subscription", &self.core_subscription)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, T> NotificationSubscription<'a, T> {
     pub async fn recv(&mut self) -> Option<T> {
         self.core_subscription
             .recv()
@@ -195,7 +198,7 @@ impl AdsClient {
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
         &mut self,
         symbol: &str,
-    ) -> Result<NotificationSubscription<T, impl Fn(Bytes) -> T + Send + Sync + 'static>> {
+    ) -> Result<NotificationSubscription<T>> {
         let size = T::size();
         let from_bytes = |payload| {
             // TODO(mw): Do we need to handle this failure better?
@@ -209,9 +212,7 @@ impl AdsClient {
         &mut self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
-    ) -> Result<
-        NotificationSubscription<SymbolTree, impl Fn(Bytes) -> SymbolTree + Send + Sync + 'static>,
-    > {
+    ) -> Result<NotificationSubscription<SymbolTree>> {
         let size = symbol_type_tree.get_size();
         let from_bytes = move |payload| SymbolTree::from_bytes(payload, &symbol_type_tree, 0);
         self.subscribe_inner(symbol, size, from_bytes).await
@@ -222,24 +223,19 @@ impl AdsClient {
         &mut self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
-    ) -> Result<
-        NotificationSubscription<SymbolMap, impl Fn(Bytes) -> SymbolMap + Send + Sync + 'static>,
-    > {
+    ) -> Result<NotificationSubscription<SymbolMap>> {
         let size = symbol_type_tree.get_size();
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, String::new());
         let from_bytes = move |payload| SymbolMap::from_bytes(payload, &symbol_type_map);
         self.subscribe_inner(symbol, size, from_bytes).await
     }
 
-    async fn subscribe_inner<T: Send + Sync + 'static, FromBytesFn>(
+    async fn subscribe_inner<T: Send + Sync + 'static>(
         &mut self,
         symbol: &str,
         size: usize,
-        from_bytes: FromBytesFn,
-    ) -> Result<NotificationSubscription<T, FromBytesFn>>
-    where
-        FromBytesFn: Fn(Bytes) -> T + Send + Sync + 'static,
-    {
+        from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
+    ) -> Result<NotificationSubscription<T>> {
         let index_offset = self.symbol_handle(symbol).await?.as_u32();
 
         let attributes = NotificationAttributes {
@@ -258,7 +254,7 @@ impl AdsClient {
 
         let subscription = NotificationSubscription {
             core_subscription,
-            from_bytes,
+            from_bytes: Box::new(from_bytes),
         };
 
         Ok(subscription)

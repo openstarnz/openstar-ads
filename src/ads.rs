@@ -335,15 +335,4 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
             }
         }
     }
-
-    /// Unsubscribe from a notification subscription.
-    pub async fn unsubscribe<T>(&self, subscription: NotificationSubscription<T>) -> Result<()> {
-        let mut connection = self.connection.lock().await;
-
-        let Some(client) = connection.client_mut() else {
-            return Ok(());
-        };
-
-        client.unsubscribe(subscription).await
-    }
 }
