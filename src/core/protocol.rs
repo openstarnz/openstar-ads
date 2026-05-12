@@ -213,13 +213,6 @@ pub(crate) struct IndexLength {
 
 #[derive(FromBytes, IntoBytes, Immutable)]
 #[repr(C)]
-pub(crate) struct ResultLength {
-    pub result: U32,
-    pub length: U32,
-}
-
-#[derive(FromBytes, IntoBytes, Immutable)]
-#[repr(C)]
 pub(crate) struct IndexLengthRW {
     pub index_group: U32,
     pub index_offset: U32,

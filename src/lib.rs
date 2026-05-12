@@ -13,7 +13,10 @@ pub use self::ads::*;
 pub use self::client::NotificationSubscription;
 pub(crate) use self::client::*;
 pub(crate) use self::connection::*;
-pub use self::core::{AdsState, AmsAddr, AmsNetId, AmsPort, DeviceInfo, Timeouts};
+pub use self::core::{
+    AdsState, AmsAddr, AmsNetId, AmsPort, DeviceInfo, String, String80, Timeouts, WString,
+    WString80, PORT, UDP_PORT,
+};
 pub use self::data_types::*;
 pub use self::error::*;
 pub use self::params::*;

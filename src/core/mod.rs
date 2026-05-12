@@ -11,6 +11,7 @@ pub(crate) use self::notification::{
     NotificationAttributes, NotificationHandle, NotificationTransmissionMode,
 };
 pub use self::protocol::{AdsState, DeviceInfo};
+pub use self::strings::{String, String80, WString, WString80};
 
 /// The default port for TCP communication.
 pub const PORT: u16 = 0xBF02;
