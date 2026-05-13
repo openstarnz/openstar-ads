@@ -80,8 +80,8 @@ pub struct Ads<RouterAddr> {
     source: Option<AmsAddr>,
     timeouts: Timeouts,
     set_to_run_mode: bool,
-    connection: Mutex<AdsConnection>,
-    symbol_handles: Mutex<HashMap<String, SymbolHandle>>,
+    connection: Arc<Mutex<AdsConnection>>,
+    symbol_handles: Arc<Mutex<HashMap<String, SymbolHandle>>>,
 }
 
 impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
@@ -177,7 +177,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         .await
     }
 
-    async fn symbol_handle(&mut self, symbol: &str) -> Result<SymbolHandle> {
+    async fn symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
         let mut symbol_handles = self.symbol_handles.lock().await;
         let handle = symbol_handles.get(symbol);
         let handle = match handle {
@@ -228,7 +228,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     }
 
     /// Read the value of a symbol with a given type once.
-    pub async fn read_symbol<T: AdsData>(&mut self, symbol: &str) -> Result<T> {
+    pub async fn read_symbol<T: AdsData>(&self, symbol: &str) -> Result<T> {
         let index_offset = self.symbol_handle(symbol).await?;
 
         self.with_client("read_symbol", async move |client| {
@@ -279,7 +279,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters.
     pub async fn invoke_rpc_method<Params: AdsParams>(
-        &mut self,
+        &self,
         symbol: &str,
         params: Params,
     ) -> Result<()> {
@@ -303,7 +303,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Invokes a PLC method (which has the attribute 'TcRpcEnable') with parameters and returns the resulting value.
     pub async fn fetch_from_rpc_method<Params: AdsParams, Value: AdsData>(
-        &mut self,
+        &self,
         symbol: &str,
         params: Params,
     ) -> Result<Value> {
@@ -329,7 +329,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Subscribes to a symbol.
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
-        &mut self,
+        &self,
         symbol: &str,
     ) -> Result<NotificationSubscription<T>> {
         let size = T::size();
@@ -344,7 +344,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     ///
     /// Sends deserialised tree-like data back with the sender channel.
     pub async fn subscribe_tree(
-        &mut self,
+        &self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
     ) -> Result<NotificationSubscription<SymbolTree>> {
@@ -358,7 +358,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     /// Sends deserialised flattened map data back with the sender channel.
     /// The key to the map is the path of the symbol relative to the symbol provided.
     pub async fn subscribe_map(
-        &mut self,
+        &self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
     ) -> Result<NotificationSubscription<SymbolMap>> {
@@ -369,7 +369,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     }
 
     async fn subscribe_inner<T: Send + Sync + 'static>(
-        &mut self,
+        &self,
         symbol: &str,
         size: usize,
         from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
