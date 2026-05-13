@@ -164,10 +164,11 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     }
 
     async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
-        let mut read_data = [0; 4];
         let write_data = symbol.as_bytes();
 
         self.with_client("get_symbol_handle", async move |client| {
+            let mut read_data = [0; 4];
+
             client
                 .read_write(index::GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
                 .await?;
@@ -408,13 +409,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         )
     }
 
-    async fn with_client<Callback, Output>(
-        &self,
-        name: &str,
-        mut callback: Callback,
-    ) -> Result<Output>
+    async fn with_client<Callback, Output>(&self, name: &str, callback: Callback) -> Result<Output>
     where
-        Callback: AsyncFnMut(Arc<core::Client>) -> Result<Output>,
+        Callback: AsyncFn(Arc<core::Client>) -> Result<Output>,
     {
         let client = {
             let connection = self.connection.lock().await;
