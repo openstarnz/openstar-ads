@@ -449,7 +449,8 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                 if Self::should_disconnect(&error) {
                     warn!("PLC client error indicates we should disconnect...");
 
-                    self.disconnect().await?;
+                    // Ignore disconnect error
+                    let _ = self.disconnect().await;
                 }
 
                 Err(error)
