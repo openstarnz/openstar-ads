@@ -442,9 +442,7 @@ pub type TypeMap = HashMap<String, Type>;
 /// Returns the symbol list and a [`TypeMap`] containing the full type
 /// inventory including fields, attributes, enum variants, and RPC methods.
 pub async fn get_symbol_info(client: &core::Client) -> Result<(Vec<Symbol>, TypeMap)> {
-    // AdsSymbolUploadInfo2 is 48 bytes, as per TcAdsDef.h
-    // See also: https://github.com/hANSIc99/ads_client/issues/1#issuecomment-1807817117
-    let mut read_data = [0; 48];
+    let mut read_data = [0; 64];
     client
         .read_exact(index::SYM_UPLOAD_INFO2, 0, &mut read_data)
         .await?;
