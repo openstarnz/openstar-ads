@@ -6,6 +6,7 @@ use tokio::sync::mpsc;
 use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
 use tracing::{error, info, warn};
 
+use crate::DeviceInfo;
 use crate::{
     core::{self, index, NotificationAttributes, NotificationTransmissionMode},
     get_symbol_info, AdsConnection, AdsData, AdsParams, AdsState, AmsAddr, Error, Result,
@@ -161,6 +162,13 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
             AdsConnection::Connected(_) => true,
             AdsConnection::Disconnected => false,
         }
+    }
+
+    pub async fn get_info(&self) -> Result<DeviceInfo> {
+        self.with_client("get_info", async move |client| {
+            client.read_device_info().await
+        })
+        .await
     }
 
     async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
