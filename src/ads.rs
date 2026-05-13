@@ -127,14 +127,16 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     /// Connect to a PLC over ADS, retry on failure.
     pub async fn connect_with_retry(&self) {
         loop {
-            if !self.is_connected().await {
-                if let Err(error) = self.connect().await {
-                    warn!("PLC connection failed, {}. Retrying in 2 seconds...", error);
-                } else {
-                    info!("PLC connection successful!");
+            if self.is_connected().await {
+                return;
+            }
 
-                    return;
-                }
+            if let Err(error) = self.connect().await {
+                warn!("PLC connection failed, {}. Retrying in 2 seconds...", error);
+            } else {
+                info!("PLC connection successful!");
+
+                return;
             }
 
             sleep(Duration::from_secs(2)).await;
@@ -187,13 +189,18 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     }
 
     async fn symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
-        let mut symbol_handles = self.symbol_handles.lock().await;
-        let handle = symbol_handles.get(symbol);
+        let handle = {
+            let symbol_handles = self.symbol_handles.lock().await;
+            symbol_handles.get(symbol).cloned()
+        };
         let handle = match handle {
             Some(handle) => handle.to_owned(),
             None => {
                 let handle = self.get_symbol_handle(symbol).await?;
-                symbol_handles.insert(symbol.to_owned(), handle);
+                {
+                    let mut symbol_handles = self.symbol_handles.lock().await;
+                    symbol_handles.insert(symbol.to_owned(), handle);
+                }
                 handle
             }
         };

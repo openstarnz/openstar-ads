@@ -177,7 +177,7 @@ impl Client {
                         tokio::time::timeout(timeout, socket.read(&mut reply)).await;
                     result.ctx("requesting port from router (with timeout)")?;
                 } else {
-                    let result: io::Result<_> = socket.write_all(&mut reply).await;
+                    let result: io::Result<_> = socket.read(&mut reply).await;
                     result.ctx("requesting port from router")?;
                 }
 
@@ -683,9 +683,9 @@ impl Client {
     pub async fn close(&self) {
         // Delete all active notifications.
         {
-            let subscribers = self.subscribers.lock().await;
-            for handle in subscribers.keys() {
-                let _ = self.delete_notification(*handle).await;
+            let subscribers = self.subscribers.lock().await.keys().cloned().collect_vec();
+            for handle in subscribers {
+                let _ = self.delete_notification(handle).await;
             }
         }
 
@@ -744,9 +744,6 @@ impl ClientReceiver {
             )
             .await;
 
-            // TODO
-            // let _ = socket.shutdown(Shutdown::Both);
-
             let mut commands = commands.lock().await;
             let keys = commands.keys().cloned().collect_vec();
             for key in keys {
@@ -768,7 +765,7 @@ impl ClientReceiver {
             result
         });
 
-        let _ = self.handle.insert(rx_worker);
+        let _handle = self.handle.insert(rx_worker);
     }
 
     pub async fn stop(&mut self) -> Option<Result<()>> {

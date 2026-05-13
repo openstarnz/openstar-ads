@@ -89,6 +89,7 @@ impl SymbolTypeTree {
             18 => Self::Uint,
             19 => Self::Udint,
             20 => Self::Lint,
+            21 => Self::Ulint,
             30 => Self::String(size),
             31 => Self::Wstring(size),
             32 => Self::Real80,

@@ -172,25 +172,25 @@ impl SymbolTree {
 
     pub fn get_timestamp(&self, path: &str) -> Option<DateTime<Utc>> {
         if let SymbolTree::Struct(map) = self.get_child(path) {
-            let SymbolTree::Uint(year) = *map.get("year")? else {
+            let SymbolTree::Uint(year) = *map.get("wYear")? else {
                 return None;
             };
-            let SymbolTree::Uint(month) = *map.get("month")? else {
+            let SymbolTree::Uint(month) = *map.get("wMonth")? else {
                 return None;
             };
-            let SymbolTree::Uint(day) = *map.get("day")? else {
+            let SymbolTree::Uint(day) = *map.get("wDay")? else {
                 return None;
             };
-            let SymbolTree::Uint(hour) = *map.get("hour")? else {
+            let SymbolTree::Uint(hour) = *map.get("wHour")? else {
                 return None;
             };
-            let SymbolTree::Uint(minute) = *map.get("minute")? else {
+            let SymbolTree::Uint(minute) = *map.get("wMinute")? else {
                 return None;
             };
-            let SymbolTree::Uint(second) = *map.get("second")? else {
+            let SymbolTree::Uint(second) = *map.get("wSecond")? else {
                 return None;
             };
-            let SymbolTree::Uint(milliseconds) = *map.get("milliseconds")? else {
+            let SymbolTree::Uint(milliseconds) = *map.get("wMilliseconds")? else {
                 return None;
             };
 
