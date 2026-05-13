@@ -73,7 +73,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> AdsBuilder<RouterAddr> {
 }
 
 /// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Ads<RouterAddr> {
     router: RouterAddr,
     target: AmsAddr,
