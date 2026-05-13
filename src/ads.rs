@@ -164,10 +164,10 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     }
 
     async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
-        let write_data = symbol.as_bytes();
-
+        let symbol = symbol.to_owned();
         self.with_client("get_symbol_handle", async move |client| {
             let mut read_data = [0; 4];
+            let write_data = symbol.as_bytes();
 
             client
                 .read_write(index::GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
@@ -250,8 +250,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
     pub async fn get_dynamic_type_tree(&self, symbol: &str) -> Result<SymbolTypeTree> {
+        let symbol = symbol.to_owned();
         self.with_client("get_dynamic_type_tree", async move |client| {
-            let symbol_name = symbol;
+            let symbol_name = &symbol;
             let (symbols, type_map) = get_symbol_info(&client).await?;
             let mut symbol = None;
 
@@ -411,7 +412,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     async fn with_client<Callback, Output>(&self, name: &str, callback: Callback) -> Result<Output>
     where
-        Callback: AsyncFn(Arc<core::Client>) -> Result<Output>,
+        Callback: AsyncFn(Arc<core::Client>) -> Result<Output> + Send + Sync + 'static,
     {
         let client = {
             let connection = self.connection.lock().await;
