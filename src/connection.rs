@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use tokio::net::ToSocketAddrs;
-use tracing::{info, warn};
+use tracing::info;
 
-use crate::{core, AmsAddr, Error, Result, Timeouts};
+use crate::{core, AmsAddr, Result, Timeouts};
 
 #[derive(Debug, Default)]
 pub enum AdsConnection {
@@ -56,20 +56,5 @@ impl AdsConnection {
             AdsConnection::Connected(client) => Some(client),
             AdsConnection::Disconnected => None,
         }
-    }
-
-    pub async fn handle_disconnect_error(&mut self, error: &Error) -> Result<()> {
-        let should_disconnect = matches!(
-            error,
-            Error::Io(_, _) | Error::Ads(_, _, 0x006) | Error::Reply(_, "unexpected invoke ID", _)
-        );
-
-        if should_disconnect {
-            warn!("PLC client error indicates we should disconnect...");
-
-            self.disconnect().await?;
-        }
-
-        Ok(())
     }
 }

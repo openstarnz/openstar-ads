@@ -141,8 +141,16 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Disconnects the internal ADS client
     pub async fn disconnect(&self) -> Result<()> {
-        let mut connection = self.connection.lock().await;
-        connection.disconnect().await?;
+        {
+            let mut symbol_handles = self.symbol_handles.lock().await;
+            symbol_handles.clear()
+        }
+
+        {
+            let mut connection = self.connection.lock().await;
+            connection.disconnect().await?;
+        }
+
         Ok(())
     }
 
@@ -151,31 +159,6 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         match *connection {
             AdsConnection::Connected(_) => true,
             AdsConnection::Disconnected => false,
-        }
-    }
-
-    async fn with_client<Callback, Output>(
-        &self,
-        name: &str,
-        mut callback: Callback,
-    ) -> Result<Output>
-    where
-        Callback: AsyncFnMut(&core::Client) -> Result<Output>,
-    {
-        let mut connection = self.connection.lock().await;
-        let Some(client) = connection.client() else {
-            return Err(Error::Disconnected);
-        };
-
-        match callback(client).await {
-            Ok(value) => Ok(value),
-            Err(error) => {
-                error!("{name} error: {error}");
-
-                connection.handle_disconnect_error(&error).await?;
-
-                Err(error)
-            }
         }
     }
 
@@ -188,7 +171,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                 .read_write(index::GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
                 .await?;
 
-            Ok(SymbolHandle(u32::from_le_bytes(read_data)))
+            Ok(u32::from_le_bytes(read_data))
         })
         .await
     }
@@ -245,7 +228,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Read the value of a symbol with a given type once.
     pub async fn read_symbol<T: AdsData>(&mut self, symbol: &str) -> Result<T> {
-        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+        let index_offset = self.symbol_handle(symbol).await?;
 
         self.with_client("read_symbol", async move |client| {
             let mut read_data = T::default();
@@ -299,7 +282,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         symbol: &str,
         params: Params,
     ) -> Result<()> {
-        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+        let index_offset = self.symbol_handle(symbol).await?;
         let write_data = params.into_data();
 
         self.with_client("invoke_rpc_method", async move |client| {
@@ -323,7 +306,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         symbol: &str,
         params: Params,
     ) -> Result<Value> {
-        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+        let index_offset = self.symbol_handle(symbol).await?;
         let write_data = params.into_data();
 
         self.with_client("fetch_from_rpc_method", async move |client| {
@@ -390,7 +373,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         size: usize,
         from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
     ) -> Result<NotificationSubscription<T>> {
-        let index_offset = self.symbol_handle(symbol).await?.as_u32();
+        let index_offset = self.symbol_handle(symbol).await?;
 
         let attributes = NotificationAttributes {
             length: size,
@@ -416,16 +399,49 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
         Ok(subscription)
     }
-}
 
-#[derive(Debug, Copy, Clone)]
-pub struct SymbolHandle(u32);
+    fn should_disconnect(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::Io(_, _) | Error::Ads(_, _, 0x006) | Error::Reply(_, "unexpected invoke ID", _)
+        )
+    }
 
-impl SymbolHandle {
-    pub fn as_u32(&self) -> u32 {
-        self.0
+    async fn with_client<Callback, Output>(
+        &self,
+        name: &str,
+        mut callback: Callback,
+    ) -> Result<Output>
+    where
+        Callback: AsyncFnMut(&core::Client) -> Result<Output>,
+    {
+        let result = {
+            let connection = self.connection.lock().await;
+            let Some(client) = connection.client() else {
+                return Err(Error::Disconnected);
+            };
+
+            callback(client).await
+        };
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                error!("{name} error: {error}");
+
+                if Self::should_disconnect(&error) {
+                    warn!("PLC client error indicates we should disconnect...");
+
+                    self.disconnect().await?;
+                }
+
+                Err(error)
+            }
+        }
     }
 }
+
+pub type SymbolHandle = u32;
 
 pub struct NotificationSubscription<T> {
     from_bytes: Box<dyn Fn(Bytes) -> T + Send + Sync + 'static>,
@@ -434,7 +450,7 @@ pub struct NotificationSubscription<T> {
 
 impl<T> Debug for NotificationSubscription<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NotificaionSubscription")
+        f.debug_struct("NotificationSubscription")
             .field("receiver", &self.receiver)
             .finish_non_exhaustive()
     }
