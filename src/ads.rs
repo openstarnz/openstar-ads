@@ -235,7 +235,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
                 let state_info = client.read_state().await?;
                 info!("Device State: {:?}", state_info);
-                assert_eq!(state_info.ads_state, AdsState::Run);
+                if state_info.ads_state != AdsState::Run {
+                    return Err(Error::Other("failed to set PLC to run mode!"));
+                }
             }
 
             Ok(())
