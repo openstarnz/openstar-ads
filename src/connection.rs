@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::{core, AmsAddr, Result, Timeouts};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum AdsConnection {
     Connected(Arc<core::Client>),
     #[default]
@@ -51,9 +51,9 @@ impl AdsConnection {
         Ok(())
     }
 
-    pub fn client(&self) -> Option<&core::Client> {
+    pub fn client(&self) -> Option<Arc<core::Client>> {
         match self {
-            AdsConnection::Connected(client) => Some(client),
+            AdsConnection::Connected(client) => Some(client.clone()),
             AdsConnection::Disconnected => None,
         }
     }

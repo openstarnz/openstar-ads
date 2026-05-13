@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, time::Duration};
 use tokio::sync::mpsc;
 use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
@@ -413,16 +414,17 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         mut callback: Callback,
     ) -> Result<Output>
     where
-        Callback: AsyncFnMut(&core::Client) -> Result<Output>,
+        Callback: AsyncFnMut(Arc<core::Client>) -> Result<Output>,
     {
-        let result = {
+        let client = {
             let connection = self.connection.lock().await;
             let Some(client) = connection.client() else {
                 return Err(Error::Disconnected);
             };
-
-            callback(client).await
+            client
         };
+
+        let result = callback(client).await;
 
         match result {
             Ok(value) => Ok(value),
