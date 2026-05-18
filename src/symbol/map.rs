@@ -296,7 +296,7 @@ impl PrimitiveSymbolDescriptor {
             }
             PrimitiveSymbolType::Real => match f32::read_from_prefix(accessible_data) {
                 Ok((float, _)) => PrimitiveValue::Float(float as f64),
-                Err(_rror) => PrimitiveValue::Malformed,
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Lreal => match f64::read_from_prefix(accessible_data) {
                 Ok((float, _)) => PrimitiveValue::Float(float),
