@@ -4,7 +4,7 @@ use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
-use zerocopy::FromBytes;
+use zerocopy::{FromBytes, SizeError};
 
 use crate::SymbolTypeTree;
 
@@ -264,25 +264,29 @@ impl SymbolTypeMapExt for SymbolTypeMap {
 }
 
 impl PrimitiveSymbolDescriptor {
-    fn datetime_from_bytes(offsets: [usize; 8], bytes: &[u8]) -> Option<DateTime<Utc>> {
-        // TODO: Should this function now return a zerocopy::error::SizeError?
-        let (year, _) = u16::read_from_prefix(&bytes[offsets[0]..]).ok()?;
-        let (month, _) = u16::read_from_prefix(&bytes[offsets[1]..]).ok()?;
-        let (day, _) = u16::read_from_prefix(&bytes[offsets[3]..]).ok()?;
-        let (hour, _) = u16::read_from_prefix(&bytes[offsets[4]..]).ok()?;
-        let (minute, _) = u16::read_from_prefix(&bytes[offsets[5]..]).ok()?;
-        let (second, _) = u16::read_from_prefix(&bytes[offsets[6]..]).ok()?;
-        let (milliseconds, _) = u16::read_from_prefix(&bytes[offsets[7]..]).ok()?;
+    fn datetime_from_bytes(
+        offsets: [usize; 8],
+        bytes: &[u8],
+    ) -> Result<Option<DateTime<Utc>>, SizeError<&[u8], u16>> {
+        let (year, _) = u16::read_from_prefix(&bytes[offsets[0]..])?;
+        let (month, _) = u16::read_from_prefix(&bytes[offsets[1]..])?;
+        let (day, _) = u16::read_from_prefix(&bytes[offsets[3]..])?;
+        let (hour, _) = u16::read_from_prefix(&bytes[offsets[4]..])?;
+        let (minute, _) = u16::read_from_prefix(&bytes[offsets[5]..])?;
+        let (second, _) = u16::read_from_prefix(&bytes[offsets[6]..])?;
+        let (milliseconds, _) = u16::read_from_prefix(&bytes[offsets[7]..])?;
 
-        NaiveDate::from_ymd_opt(year.into(), month.into(), day.into()).and_then(|date| {
-            date.and_hms_milli_opt(
-                hour.into(),
-                minute.into(),
-                second.into(),
-                milliseconds.into(),
-            )
-            .map(|datetime| datetime.and_utc())
-        })
+        Ok(
+            NaiveDate::from_ymd_opt(year.into(), month.into(), day.into()).and_then(|date| {
+                date.and_hms_milli_opt(
+                    hour.into(),
+                    minute.into(),
+                    second.into(),
+                    milliseconds.into(),
+                )
+                .map(|datetime| datetime.and_utc())
+            }),
+        )
     }
 
     pub fn read_from_bytes(&self, bytes: &[u8]) -> PrimitiveValue {
@@ -290,8 +294,8 @@ impl PrimitiveSymbolDescriptor {
         match self.symbol_type {
             PrimitiveSymbolType::TimeStruct(offsets) => {
                 match Self::datetime_from_bytes(offsets, accessible_data) {
-                    Some(datetime) => PrimitiveValue::Timestamp(datetime),
-                    None => PrimitiveValue::Malformed,
+                    Ok(Some(datetime)) => PrimitiveValue::Timestamp(datetime),
+                    Err(_) | Ok(None) => PrimitiveValue::Malformed,
                 }
             }
             PrimitiveSymbolType::Real => match f32::read_from_prefix(accessible_data) {
