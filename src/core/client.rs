@@ -78,6 +78,8 @@ type NotificationSubscribers = Arc<Mutex<BTreeMap<u32, mpsc::Sender<Bytes>>>>;
 
 /// Represents a connection to a ADS server.
 ///
+/// The client implements only [the core ADS commands](https://infosys.beckhoff.com/english.php?content=../content/1033/tc3_ads_intro/115848331.html&id=).
+///
 /// The Client's communication methods use `&self`, so that it can be freely
 /// shared within one thread, or sent, between threads.
 #[derive(Debug)]
