@@ -40,7 +40,7 @@ pub enum Error {
 
     /// An unspecified catch-all error
     #[error("an error occured: {0}")]
-    Other(&'static str),
+    Other(String),
 }
 
 impl Clone for Error {
@@ -54,7 +54,7 @@ impl Clone for Error {
             IoSync(ctx, e, i) => IoSync(ctx, e, *i),
             SymbolTypeTree(e) => SymbolTypeTree(e.clone()),
             Disconnected => Disconnected,
-            Other(ctx) => Other(ctx),
+            Other(ctx) => Other(ctx.clone()),
         }
     }
 }

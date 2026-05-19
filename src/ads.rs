@@ -117,7 +117,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
             if self.set_to_run_mode {
                 self.set_to_run_mode().await?;
             } else {
-                return Err(Error::Other("PLC not in run mode, stopping connection."));
+                return Err(Error::Other(
+                    "PLC not in run mode, stopping connection.".to_owned(),
+                ));
             }
         }
 
@@ -234,7 +236,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                 let state_info = client.read_state().await?;
                 info!("Device State: {:?}", state_info);
                 if state_info.ads_state != AdsState::Run {
-                    return Err(Error::Other("failed to set PLC to run mode!"));
+                    return Err(Error::Other("failed to set PLC to run mode!".to_owned()));
                 }
             }
 

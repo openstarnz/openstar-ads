@@ -267,7 +267,11 @@ fn parse_enum_infos(ptr: &mut &[u8], size: usize, base_type: u32) -> Result<Vec<
                 2 => i16::from_le_bytes(raw[..2].try_into().unwrap_or([0; 2])) as i64,
                 4 => i32::from_le_bytes(raw[..4].try_into().unwrap_or([0; 4])) as i64,
                 8 => i64::from_le_bytes(raw[..8].try_into().unwrap_or([0; 8])),
-                _ => -99,
+                _ => {
+                    return Err(Error::Other(format!(
+                        "Unexpected enum info value: base_type={base_type}, size={size}"
+                    )))
+                }
             },
         };
         enums.push(EnumInfo { name, value });
@@ -735,5 +739,5 @@ fn decode_type_info_by_name(data: &[u8]) -> Result<Type> {
         }
     }
 
-    decode_entry(data, None)?.ok_or(Error::Other("expected top-level type"))
+    decode_entry(data, None)?.ok_or(Error::Other("expected top-level type".to_owned()))
 }
