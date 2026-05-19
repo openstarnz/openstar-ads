@@ -9,8 +9,8 @@ Features:
 - Subscribe to symbol values
 - Call RPC methods, with optional params and optional output
 - Get dynamic symbol type trees at runtime
-- Subscribe to a symbol tree using the dynamic type tree.
-- Subscribe to a flattened map of data for dynamic type tree.
+- Subscribe to a symbol tree using the dynamic type tree
+- Subscribe to a flattened map of data for dynamic type tree
 
 [OpenStar]: https://openstar.tech
 
