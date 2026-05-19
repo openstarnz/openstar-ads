@@ -623,14 +623,11 @@ impl Client {
         self.commands.lock().await.remove_entry(id);
     }
 
-    /// Add a notification handle for some index group/offset.
-    ///
-    /// Notifications are delivered via a MPMC channel whose reading end can be
-    /// obtained from `get_notification_channel` on the `Client` object.
-    /// The returned `Handle` can be used to check which notification has fired.
+    /// Add a notification handle for some index group/offset, returns
+    /// a MPSC receiver channel and a handle.
     ///
     /// If the notification is not deleted explictly using `delete_notification`
-    /// and the `Handle`, it is deleted when the `Client` object is dropped.
+    /// and the `Handle`, it is deleted with `Client::close`.
     pub async fn add_notification(
         &self,
         index_group: u32,
