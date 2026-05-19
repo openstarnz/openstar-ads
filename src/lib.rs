@@ -84,8 +84,7 @@ pub use self::ads::*;
 pub(crate) use self::connection::*;
 pub use self::core::{
     AdsState, AmsAddr, AmsNetId, AmsPort, DeviceInfo, NotificationTransmissionMode,
-    ParseAmsAddrError, ParseAmsNetIdError, String, String80, Timeouts, WString, WString80, PORT,
-    UDP_PORT,
+    ParseAmsAddrError, ParseAmsNetIdError, Timeouts, PORT, UDP_PORT,
 };
 pub use self::error::*;
 pub use self::params::*;
