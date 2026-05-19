@@ -128,7 +128,7 @@ impl SymbolTree {
                 Self::String(String::from_utf16_lossy(&words).to_string())
             }
             SymbolTypeTree::Real80 => {
-                if data.len() < 10 {
+                if accessible_data.len() < 10 {
                     return Self::Malformed;
                 }
                 let mut buffer: [u8; 10] = [0; 10];

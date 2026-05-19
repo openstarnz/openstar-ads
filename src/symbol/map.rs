@@ -360,7 +360,7 @@ impl PrimitiveSymbolDescriptor {
                 PrimitiveValue::String(String::from_utf16_lossy(&words).to_string())
             }
             PrimitiveSymbolType::Real80 => {
-                if bytes.len() < 10 {
+                if accessible_data.len() < 10 {
                     return PrimitiveValue::Malformed;
                 }
                 let mut buffer: [u8; 10] = [0; 10];
