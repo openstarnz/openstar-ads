@@ -1,5 +1,10 @@
 use crate::data_types::AdsData;
 
+/// A magic trait for parameters to RPC methods.
+///
+/// If you think this is odd, here is [a similar magic trait that powers axum][axum-magic].
+///
+/// [axum-magic]: https://docs.rs/axum/latest/axum/extract/trait.FromRequest.html
 pub trait AdsParams {
     fn into_data(self) -> Vec<u8>;
 }

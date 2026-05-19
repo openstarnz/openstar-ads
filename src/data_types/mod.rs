@@ -1,3 +1,5 @@
+//! The data types that can be sent or received from ADS.
+
 pub mod bool;
 pub mod dint;
 pub mod int;

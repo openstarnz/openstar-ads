@@ -1,3 +1,5 @@
+//! How we handle dynamic symbol types at runtime.
+
 mod map;
 mod tree;
 mod r#type;
