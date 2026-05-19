@@ -1,6 +1,5 @@
 use std::fmt::Display;
 
-use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -380,14 +379,14 @@ impl PrimitiveSymbolDescriptor {
 }
 
 pub trait SymbolMapExt {
-    fn from_bytes(bytes: Bytes, symbol_type_map: &SymbolTypeMap) -> Self;
+    fn from_bytes(bytes: &[u8], symbol_type_map: &SymbolTypeMap) -> Self;
 }
 
 impl SymbolMapExt for SymbolMap {
-    fn from_bytes(bytes: Bytes, symbol_type_map: &SymbolTypeMap) -> SymbolMap {
+    fn from_bytes(bytes: &[u8], symbol_type_map: &SymbolTypeMap) -> SymbolMap {
         let mut map = SymbolMap::new();
         for (path, symbol_descriptor) in symbol_type_map {
-            map.insert(path.to_string(), symbol_descriptor.read_from_bytes(&bytes));
+            map.insert(path.to_string(), symbol_descriptor.read_from_bytes(bytes));
         }
         map
     }

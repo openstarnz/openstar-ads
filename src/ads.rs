@@ -352,9 +352,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         symbol: &str,
     ) -> Result<NotificationSubscription<T>> {
         let size = T::size();
-        let from_bytes = |payload| {
+        let from_bytes = |payload: Bytes| {
             // TODO(mw): Do we need to handle this failure better?
-            T::from_bytes(payload).expect("Failed to parse PlcDataType from notification bytes")
+            T::from_bytes(&payload).expect("Failed to parse PlcDataType from notification bytes")
         };
         self.subscribe_inner(symbol, size, from_bytes).await
     }
@@ -368,7 +368,8 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         symbol_type_tree: SymbolTypeTree,
     ) -> Result<NotificationSubscription<SymbolTree>> {
         let size = symbol_type_tree.get_size();
-        let from_bytes = move |payload| SymbolTree::from_bytes(payload, &symbol_type_tree, 0);
+        let from_bytes =
+            move |payload: Bytes| SymbolTree::from_bytes(&payload, &symbol_type_tree, 0);
         self.subscribe_inner(symbol, size, from_bytes).await
     }
 
@@ -383,7 +384,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     ) -> Result<NotificationSubscription<SymbolMap>> {
         let size = symbol_type_tree.get_size();
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, String::new());
-        let from_bytes = move |payload| SymbolMap::from_bytes(payload, &symbol_type_map);
+        let from_bytes = move |payload: Bytes| SymbolMap::from_bytes(&payload, &symbol_type_map);
         self.subscribe_inner(symbol, size, from_bytes).await
     }
 

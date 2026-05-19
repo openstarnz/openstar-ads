@@ -1,5 +1,4 @@
 use super::type_tree::SymbolTypeTree;
-use bytes::Bytes;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -33,7 +32,7 @@ pub enum SymbolTree {
 
 impl SymbolTree {
     pub fn from_bytes(
-        data: Bytes,
+        data: &[u8],
         symbol_type_tree: &SymbolTypeTree,
         parent_offset: usize,
     ) -> Self {
@@ -54,7 +53,7 @@ impl SymbolTree {
                         tree_map.insert(
                             name.clone(),
                             SymbolTree::from_bytes(
-                                data.clone(),
+                                data,
                                 field_type_tree,
                                 parent_offset + child_offset,
                             ),

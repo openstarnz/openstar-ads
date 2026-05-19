@@ -42,7 +42,7 @@ mod tests {
 
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
 
-        let symbol_map = SymbolMap::from_bytes(data.into(), &symbol_type_map);
+        let symbol_map = SymbolMap::from_bytes(&data, &symbol_type_map);
 
         let expected = indexmap::indexmap! {
             "integer".to_string() => PrimitiveValue::Int(-123),
@@ -99,7 +99,7 @@ mod tests {
 
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "status".to_string());
 
-        let symbol_map = SymbolMap::from_bytes(data.into(), &symbol_type_map);
+        let symbol_map = SymbolMap::from_bytes(&data, &symbol_type_map);
 
         let expected_date: DateTime<Utc> = DateTime::from_timestamp_millis(milliseconds.into())
             .unwrap()

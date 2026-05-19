@@ -12,8 +12,6 @@ pub mod word;
 
 use std::fmt::Debug;
 
-use bytes::Bytes;
-
 pub trait AdsData:
     Clone
     + Debug
@@ -27,7 +25,7 @@ pub trait AdsData:
         std::mem::size_of::<Self>()
     }
 
-    fn from_bytes(bytes: Bytes) -> Option<Self> {
-        Self::read_from_bytes(&bytes).ok()
+    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        Self::read_from_bytes(bytes).ok()
     }
 }
