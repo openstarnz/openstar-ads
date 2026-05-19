@@ -350,13 +350,15 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
         &self,
         symbol: &str,
+        transmission_mode: NotificationTransmissionMode,
     ) -> Result<NotificationSubscription<T>> {
         let size = T::size();
         let from_bytes = |payload: Bytes| {
             // TODO(mw): Do we need to handle this failure better?
             T::from_bytes(&payload).expect("Failed to parse PlcDataType from notification bytes")
         };
-        self.subscribe_inner(symbol, size, from_bytes).await
+        self.subscribe_inner(symbol, size, from_bytes, transmission_mode)
+            .await
     }
 
     /// Subscribes to a symbol tree using the symbol type tree.
@@ -366,11 +368,13 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         &self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
+        transmission_mode: NotificationTransmissionMode,
     ) -> Result<NotificationSubscription<SymbolTree>> {
         let size = symbol_type_tree.get_size();
         let from_bytes =
             move |payload: Bytes| SymbolTree::from_bytes(&payload, &symbol_type_tree, 0);
-        self.subscribe_inner(symbol, size, from_bytes).await
+        self.subscribe_inner(symbol, size, from_bytes, transmission_mode)
+            .await
     }
 
     /// Subscribes to the given symbol using the symbol type map.
@@ -381,11 +385,13 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         &self,
         symbol: &str,
         symbol_type_tree: SymbolTypeTree,
+        transmission_mode: NotificationTransmissionMode,
     ) -> Result<NotificationSubscription<SymbolMap>> {
         let size = symbol_type_tree.get_size();
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, String::new());
         let from_bytes = move |payload: Bytes| SymbolMap::from_bytes(&payload, &symbol_type_map);
-        self.subscribe_inner(symbol, size, from_bytes).await
+        self.subscribe_inner(symbol, size, from_bytes, transmission_mode)
+            .await
     }
 
     async fn subscribe_inner<T: Send + Sync + 'static>(
@@ -393,12 +399,13 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         symbol: &str,
         size: usize,
         from_bytes: impl Fn(Bytes) -> T + Send + Sync + 'static,
+        transmission_mode: NotificationTransmissionMode,
     ) -> Result<NotificationSubscription<T>> {
         let index_offset = self.symbol_handle(symbol).await?;
 
         let attributes = NotificationAttributes {
             length: size,
-            trans_mode: NotificationTransmissionMode::ServerOnChange,
+            trans_mode: transmission_mode,
             max_delay: Duration::ZERO,
             // TODO: setting this to higher e.g: 1000ms does not work, maybe because the status data is changing every PLC cycle?
             // NB: Setting this to 10ms to match the PLC cycle time that it seems to be reporting at anyway
