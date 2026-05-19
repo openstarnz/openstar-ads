@@ -204,7 +204,13 @@ impl Client {
         let client = Arc::new_cyclic(|weak| {
             let mut receiver = ClientReceiver::new(weak.clone());
 
-            receiver.start(socket_reader, source, commands.clone(), subscribers.clone());
+            receiver.start(
+                socket_reader,
+                source,
+                commands.clone(),
+                subscribers.clone(),
+                timeouts.read.clone(),
+            );
 
             Client {
                 source,
@@ -729,6 +735,7 @@ impl ClientReceiver {
         source: AmsAddr,
         commands: PendingCommands,
         subscribers: NotificationSubscribers,
+        read_timeout: Option<Duration>,
     ) {
         let client = self.client.clone();
         let rx_worker = tokio::spawn(async move {
@@ -738,6 +745,7 @@ impl ClientReceiver {
                 source,
                 commands.clone(),
                 subscribers.clone(),
+                read_timeout,
             )
             .await;
 
@@ -779,13 +787,20 @@ impl ClientReceiver {
         source: AmsAddr,
         commands: PendingCommands,
         subscribers: NotificationSubscribers,
+        read_timeout: Option<Duration>,
     ) -> Result<()> {
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
-            // TODO timeout
-            let result: io::Result<_> = socket_rx.read_exact(&mut ads_header_buf[..6]).await;
-            result.ctx("receiving AMS/TCP header")?;
+            if let Some(timeout) = read_timeout {
+                let result: TimeoutResult<io::Result<_>> =
+                    tokio::time::timeout(timeout, socket_rx.read_exact(&mut ads_header_buf[..6]))
+                        .await;
+                result.ctx("receiving AMS/TCP header (with timeout)")?;
+            } else {
+                let result: io::Result<_> = socket_rx.read_exact(&mut ads_header_buf[..6]).await;
+                result.ctx("receiving AMS/TCP header")?;
+            };
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
@@ -793,20 +808,36 @@ impl ClientReceiver {
                 0..=31 => {
                     let mut discard = [0u8; 31];
 
-                    // TODO timeout
-                    let result: io::Result<_> = socket_rx
-                        .read_exact(&mut discard[..packet_len as usize])
+                    if let Some(timeout) = read_timeout {
+                        let result: TimeoutResult<io::Result<_>> = tokio::time::timeout(
+                            timeout,
+                            socket_rx.read_exact(&mut discard[..packet_len as usize]),
+                        )
                         .await;
-                    result.ctx("discarding bad data")?;
+                        result.ctx("discarding bad data (with timeout)")?;
+                    } else {
+                        let result: io::Result<_> = socket_rx
+                            .read_exact(&mut discard[..packet_len as usize])
+                            .await;
+                        result.ctx("discarding bad data")?;
+                    };
 
                     continue;
                 }
 
                 _ => {
-                    // TODO timeout
-                    let result: io::Result<_> =
-                        socket_rx.read_exact(&mut ads_header_buf[6..]).await;
-                    result.ctx("receiving AMS header")?;
+                    if let Some(timeout) = read_timeout {
+                        let result: TimeoutResult<io::Result<_>> = tokio::time::timeout(
+                            timeout,
+                            socket_rx.read_exact(&mut ads_header_buf[6..]),
+                        )
+                        .await;
+                        result.ctx("receiving AMS header (with timeout)")?;
+                    } else {
+                        let result: io::Result<_> =
+                            socket_rx.read_exact(&mut ads_header_buf[6..]).await;
+                        result.ctx("receiving AMS header")?;
+                    };
 
                     AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
                         .map_err(|_| std::io::ErrorKind::InvalidData.into())
@@ -818,9 +849,14 @@ impl ClientReceiver {
 
             let mut payload_buf = BytesMut::zeroed(payload_len as usize);
 
-            // TODO timeout
-            let result: io::Result<_> = socket_rx.read_exact(&mut payload_buf).await;
-            result.ctx("receiving Ads data payload")?;
+            if let Some(timeout) = read_timeout {
+                let result: TimeoutResult<io::Result<_>> =
+                    tokio::time::timeout(timeout, socket_rx.read_exact(&mut payload_buf)).await;
+                result.ctx("receiving Ads data payload (with timeout)")?;
+            } else {
+                let result: io::Result<_> = socket_rx.read_exact(&mut payload_buf).await;
+                result.ctx("receiving Ads data payload")?;
+            };
 
             // Reserved bytes should be well-known
             // Anything else might be invalid data
