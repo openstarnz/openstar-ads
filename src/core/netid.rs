@@ -70,9 +70,9 @@ impl FromStr for AmsNetId {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         let mut bytes = Vec::with_capacity(6);
-        for (index, item) in s.split('.').enumerate() {
+        for item in s.split('.') {
             let byte = item.parse::<u8>()?;
-            bytes[index] = byte;
+            bytes.push(byte);
         }
         let bytes: [u8; 6] = bytes
             .try_into()
