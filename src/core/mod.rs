@@ -6,7 +6,7 @@ pub mod protocol;
 mod strings;
 
 pub use self::client::{Client, Timeouts};
-pub use self::netid::{AmsAddr, AmsNetId, AmsPort};
+pub use self::netid::{AmsAddr, AmsNetId, AmsPort, ParseAmsAddrError, ParseAmsNetIdError};
 pub(crate) use self::notification::{
     NotificationAttributes, NotificationHandle, NotificationTransmissionMode,
 };

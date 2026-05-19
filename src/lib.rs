@@ -11,8 +11,8 @@ mod symbol;
 pub use self::ads::*;
 pub(crate) use self::connection::*;
 pub use self::core::{
-    AdsState, AmsAddr, AmsNetId, AmsPort, DeviceInfo, String, String80, Timeouts, WString,
-    WString80, PORT, UDP_PORT,
+    AdsState, AmsAddr, AmsNetId, AmsPort, DeviceInfo, ParseAmsAddrError, ParseAmsNetIdError,
+    String, String80, Timeouts, WString, WString80, PORT, UDP_PORT,
 };
 pub use self::data_types::*;
 pub use self::error::*;

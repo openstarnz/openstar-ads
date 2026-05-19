@@ -4,9 +4,10 @@ use std::convert::TryInto;
 use std::fmt::{self, Display};
 use std::io::{Read, Write};
 use std::net::Ipv4Addr;
+use std::num::ParseIntError;
 use std::str::FromStr;
 
-use byteorder::{LE, ReadBytesExt, WriteBytesExt};
+use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use itertools::Itertools;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -56,21 +57,28 @@ impl AmsNetId {
     }
 }
 
-impl FromStr for AmsNetId {
-    type Err = &'static str;
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ParseAmsNetIdError {
+    #[error("failed to parse byte: {0}")]
+    ParseByte(#[from] ParseIntError),
 
-    /// Parse a NetID from a string (`a.b.c.d.e.f`).
-    ///
-    /// Bytes can be missing in the end; missing bytes are substituted by 1.
-    fn from_str(s: &str) -> Result<AmsNetId, &'static str> {
-        let mut arr = [1; 6];
-        for (i, part) in s.split('.').enumerate() {
-            match (arr.get_mut(i), part.parse()) {
-                (Some(loc), Ok(byte)) => *loc = byte,
-                _ => return Err("invalid NetID string"),
-            }
+    #[error("AmsNetId consists of exactly 6 bytes")]
+    Not6Bytes,
+}
+
+impl FromStr for AmsNetId {
+    type Err = ParseAmsNetIdError;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let mut bytes = Vec::with_capacity(6);
+        for (index, item) in s.split('.').enumerate() {
+            let byte = item.parse::<u8>()?;
+            bytes[index] = byte;
         }
-        Ok(AmsNetId(arr))
+        let bytes: [u8; 6] = bytes
+            .try_into()
+            .map_err(|_error| ParseAmsNetIdError::Not6Bytes)?;
+        Ok(Self(bytes))
     }
 }
 
@@ -122,19 +130,32 @@ impl AmsAddr {
     }
 }
 
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ParseAmsAddrError {
+    #[error("invalid AMS addr string: {input}")]
+    InvalidInput { input: String },
+
+    #[error("failed to parse AmsNetId: {0}")]
+    ParseAmsNetId(#[from] ParseAmsNetIdError),
+
+    #[error("invalid port number")]
+    InvalidPortNumber(ParseIntError),
+}
+
 impl FromStr for AmsAddr {
-    type Err = &'static str;
+    type Err = ParseAmsAddrError;
 
     /// Parse an AMS address from a string (netid:port).
-    fn from_str(s: &str) -> Result<AmsAddr, &'static str> {
-        let (addr, port) = s
-            .split(':')
-            .collect_tuple()
-            .ok_or("invalid AMS addr string")?;
-        Ok(Self(
-            addr.parse()?,
-            port.parse().map_err(|_| "invalid port number")?,
-        ))
+    fn from_str(s: &str) -> Result<AmsAddr, Self::Err> {
+        let (addr, port) =
+            s.split(':')
+                .collect_tuple()
+                .ok_or_else(|| ParseAmsAddrError::InvalidInput {
+                    input: s.to_owned(),
+                })?;
+        let addr = addr.parse()?;
+        let port = port.parse().map_err(ParseAmsAddrError::InvalidPortNumber)?;
+        Ok(Self(addr, port))
     }
 }
 
