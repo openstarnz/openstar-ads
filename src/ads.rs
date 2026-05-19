@@ -283,7 +283,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
                 return Ok(SymbolTypeTree::Missing);
             };
 
-            let symbol_type_tree = match SymbolTypeTree::from_symbol(&symbol, &type_map) {
+            let symbol_type_tree = match SymbolTypeTree::try_from_symbol(&symbol, &type_map) {
                 Ok(symbol_type_tree) => symbol_type_tree,
                 Err(err) => {
                     error!("Error when getting symbol type from type map {err:?}");

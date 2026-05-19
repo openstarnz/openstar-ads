@@ -63,14 +63,14 @@ impl SymbolTypeTree {
 }
 
 impl SymbolTypeTree {
-    pub fn from_symbol(
+    pub fn try_from_symbol(
         symbol: &Symbol,
         type_map: &HashMap<String, Type>,
     ) -> Result<Self, SymbolTypeTreeError> {
         Self::try_from_type_or_field(symbol.base_type, symbol.size, &symbol.typ, type_map)
     }
 
-    pub fn from_field(
+    pub fn try_from_field(
         field: &Field,
         type_map: &HashMap<String, Type>,
     ) -> Result<Self, SymbolTypeTreeError> {
@@ -121,7 +121,7 @@ impl SymbolTypeTree {
                     struct_map.insert(
                         field.name.clone(),
                         (
-                            Self::from_field(field, type_map)
+                            Self::try_from_field(field, type_map)
                                 .unwrap_or(SymbolTypeTree::Unknown(field.size)),
                             field.offset,
                         ),
