@@ -358,17 +358,16 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Subscribes to a symbol.
     ///
-    /// Sends value data back with [`NotificationSubscription<T>`].
+    /// Sends value data back with [`NotificationSubscription<Option<T>>`].
+    ///  Note, [`NotificationSubscription::recv`] for this subscription will return `Option<Option<T>>`,
+    ///  the first layer when the receiver has ended, the second layer when failed to parse the bytes.
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
         &self,
         symbol: &str,
         transmission_mode: NotificationTransmissionMode,
-    ) -> Result<NotificationSubscription<T>> {
+    ) -> Result<NotificationSubscription<Option<T>>> {
         let size = T::size();
-        let from_bytes = |payload: Bytes| {
-            // TODO(mw): Do we need to handle this failure better?
-            T::from_bytes(&payload).expect("Failed to parse PlcDataType from notification bytes")
-        };
+        let from_bytes = |payload: Bytes| T::from_bytes(&payload);
         self.subscribe_inner(symbol, size, from_bytes, transmission_mode)
             .await
     }
