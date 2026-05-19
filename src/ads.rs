@@ -130,9 +130,8 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
             if self.set_to_run_mode {
                 self.set_to_run_mode().await?;
             } else {
-                return Err(Error::Other(
-                    "PLC not in run mode, stopping connection.".to_owned(),
-                ));
+                self.disconnect().await;
+                return Err(Error::Other("PLC not in run mode".to_owned()));
             }
         }
 
