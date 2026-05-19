@@ -9,8 +9,12 @@ use tracing::{error, info, warn};
 use crate::DeviceInfo;
 use crate::{
     core::{self, index, NotificationAttributes, NotificationTransmissionMode},
-    get_symbol_info, AdsConnection, AdsData, AdsParams, AdsState, AmsAddr, Error, Result,
-    SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree, Timeouts,
+    data_types::AdsData,
+    symbol::{
+        get_symbol_info, SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt,
+        SymbolTypeTree,
+    },
+    AdsConnection, AdsParams, AdsState, AmsAddr, Error, Result, Timeouts,
 };
 
 /// A builder for help create [Ads].

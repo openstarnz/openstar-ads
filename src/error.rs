@@ -4,7 +4,7 @@ use std::io;
 
 use tokio::time::error::Elapsed;
 
-use crate::SymbolTypeTreeError;
+use crate::symbol::SymbolTypeTreeError;
 
 /// Result alias for `ads::Error`.
 pub type Result<T> = std::result::Result<T, Error>;

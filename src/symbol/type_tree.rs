@@ -2,7 +2,7 @@ use indexmap::IndexMap;
 use std::{collections::HashMap, fmt::Debug};
 use tracing::warn;
 
-use crate::{Field, Symbol, Type};
+use crate::symbol::{Field, Symbol, Type};
 
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum SymbolTypeTreeError {

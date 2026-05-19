@@ -75,10 +75,10 @@
 mod ads;
 mod connection;
 pub(crate) mod core;
-mod data_types;
+pub mod data_types;
 mod error;
 mod params;
-mod symbol;
+pub mod symbol;
 
 pub use self::ads::*;
 pub(crate) use self::connection::*;
@@ -87,7 +87,5 @@ pub use self::core::{
     ParseAmsAddrError, ParseAmsNetIdError, String, String80, Timeouts, WString, WString80, PORT,
     UDP_PORT,
 };
-pub use self::data_types::*;
 pub use self::error::*;
 pub use self::params::*;
-pub use self::symbol::*;

@@ -13,7 +13,7 @@ mod tests {
     use chrono::{DateTime, Datelike, Timelike, Utc};
     use indexmap::IndexMap;
 
-    use crate::{
+    use crate::symbol::{
         PrimitiveValue, SymbolMap, SymbolMapExt, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
     };
 
