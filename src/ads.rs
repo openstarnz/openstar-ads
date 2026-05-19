@@ -13,6 +13,7 @@ use crate::{
     SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree, Timeouts,
 };
 
+/// A builder for help create [Ads].
 #[derive(Debug, Clone)]
 pub struct AdsBuilder<RouterAddr> {
     router: RouterAddr,
@@ -73,7 +74,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> AdsBuilder<RouterAddr> {
     }
 }
 
-/// Provides a more user friendly wrapper to interact with the OpenStar ADS PLC's.
+/// The top-level abstraction to interact with the OpenStar ADS PLC's.
 #[derive(Debug, Clone)]
 pub struct Ads<RouterAddr> {
     router: RouterAddr,
@@ -86,6 +87,9 @@ pub struct Ads<RouterAddr> {
 }
 
 impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
+    /// Create a new [`Ads`].
+    ///
+    /// Recommended to use [`AdsBuilder`].
     pub fn new(
         router: RouterAddr,
         target: AmsAddr,
@@ -145,7 +149,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         }
     }
 
-    /// Disconnects the internal ADS client
+    /// Disconnects the internal ADS client.
     pub async fn disconnect(&self) {
         {
             let mut symbol_handles = self.symbol_handles.lock().await;
@@ -158,6 +162,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         }
     }
 
+    /// Check whether the ADS client is connected.
     pub async fn is_connected(&self) -> bool {
         let connection = self.connection.lock().await;
         match *connection {
@@ -166,46 +171,12 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         }
     }
 
+    /// Get info from the ADS device.
     pub async fn get_info(&self) -> Result<DeviceInfo> {
         self.with_client("get_info", async move |client| {
             client.read_device_info().await
         })
         .await
-    }
-
-    async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
-        let symbol = symbol.to_owned();
-        self.with_client("get_symbol_handle", async move |client| {
-            let mut read_data = [0; 4];
-            let write_data = symbol.as_bytes();
-
-            client
-                .read_write(index::GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
-                .await?;
-
-            Ok(u32::from_le_bytes(read_data))
-        })
-        .await
-    }
-
-    async fn symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
-        let handle = {
-            let symbol_handles = self.symbol_handles.lock().await;
-            symbol_handles.get(symbol).cloned()
-        };
-        let handle = match handle {
-            Some(handle) => handle.to_owned(),
-            None => {
-                let handle = self.get_symbol_handle(symbol).await?;
-                {
-                    let mut symbol_handles = self.symbol_handles.lock().await;
-                    symbol_handles.insert(symbol.to_owned(), handle);
-                }
-                handle
-            }
-        };
-
-        Ok(handle)
     }
 
     /// Returns if the connected ADS device is in run mode.
@@ -263,6 +234,41 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
             Ok(read_data)
         })
         .await
+    }
+
+    async fn get_symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
+        let symbol = symbol.to_owned();
+        self.with_client("get_symbol_handle", async move |client| {
+            let mut read_data = [0; 4];
+            let write_data = symbol.as_bytes();
+
+            client
+                .read_write(index::GET_SYMHANDLE_BYNAME, 0, &mut read_data, write_data)
+                .await?;
+
+            Ok(u32::from_le_bytes(read_data))
+        })
+        .await
+    }
+
+    async fn symbol_handle(&self, symbol: &str) -> Result<SymbolHandle> {
+        let handle = {
+            let symbol_handles = self.symbol_handles.lock().await;
+            symbol_handles.get(symbol).cloned()
+        };
+        let handle = match handle {
+            Some(handle) => handle.to_owned(),
+            None => {
+                let handle = self.get_symbol_handle(symbol).await?;
+                {
+                    let mut symbol_handles = self.symbol_handles.lock().await;
+                    symbol_handles.insert(symbol.to_owned(), handle);
+                }
+                handle
+            }
+        };
+
+        Ok(handle)
     }
 
     /// Gets a type tree for the symbol to get the format of a symbol's internal structure at runtime.
@@ -347,6 +353,8 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     }
 
     /// Subscribes to a symbol.
+    ///
+    /// Sends value data back with [`NotificationSubscription<T>`].
     pub async fn subscribe<T: AdsData + Send + Sync + 'static>(
         &self,
         symbol: &str,
@@ -363,7 +371,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Subscribes to a symbol tree using the symbol type tree.
     ///
-    /// Sends deserialised tree-like data back with the sender channel.
+    /// Sends deserialised tree-like data back with [`NotificationSubscription<SymbolTree>`].
     pub async fn subscribe_tree(
         &self,
         symbol: &str,
@@ -379,8 +387,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
     /// Subscribes to the given symbol using the symbol type map.
     ///
-    /// Sends deserialised flattened map data back with the sender channel.
-    /// The key to the map is the path of the symbol relative to the symbol provided.
+    /// Sends deserialised flattened map data back with [`NotificationSubscription<SymbolTree>`].
+    ///
+    /// A keys in the map is the path of the updated symbol relative to the root symbol provided.
     pub async fn subscribe_map(
         &self,
         symbol: &str,
@@ -469,6 +478,9 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
 pub type SymbolHandle = u32;
 
+/// A subscription to an ADS notification, with processing of bytes into a type `T`.
+///
+/// See the [`recv()`][Self::recv] method to read incoming data.
 pub struct NotificationSubscription<T> {
     from_bytes: Box<dyn Fn(Bytes) -> T + Send + Sync + 'static>,
     receiver: mpsc::Receiver<Bytes>,

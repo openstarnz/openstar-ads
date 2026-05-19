@@ -1,6 +1,6 @@
 //! Well-known ADS index groups.
 //!
-//! Source: https://github.com/birkenfeld/ads-rs/blob/master/src/index.rs
+//! Source: <https://github.com/birkenfeld/ads-rs/blob/master/src/index.rs>
 
 // Unfortunately, not all those constants are documented.
 #![allow(missing_docs)]
