@@ -17,7 +17,7 @@ use crate::{
     AdsConnection, AdsParams, AdsState, AmsAddr, Error, Result, Timeouts,
 };
 
-/// A builder for help create [Ads].
+/// A builder for help create [`Ads`].
 #[derive(Debug, Clone)]
 pub struct AdsBuilder<RouterAddr> {
     router: RouterAddr,

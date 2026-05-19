@@ -55,6 +55,7 @@ impl AmsNetId {
     }
 }
 
+/// Error when parsing an AMS NetID from a string
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ParseAmsNetIdError {
     #[error("failed to parse byte: {0}")]
@@ -114,12 +115,13 @@ impl AmsAddr {
     }
 }
 
+/// Error when parsing an AMS address from a string
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ParseAmsAddrError {
     #[error("invalid AMS addr string: {input}")]
     InvalidInput { input: String },
 
-    #[error("failed to parse AmsNetId: {0}")]
+    #[error("failed to parse AMS NetId: {0}")]
     ParseAmsNetId(#[from] ParseAmsNetIdError),
 
     #[error("invalid port number")]
