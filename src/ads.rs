@@ -64,6 +64,11 @@ impl<RouterAddr> AdsBuilder<RouterAddr> {
         self.timeouts = timeouts;
         self
     }
+
+    pub fn set_to_run_mode(mut self, set_to_run_mode: bool) -> Self {
+        self.set_to_run_mode = set_to_run_mode;
+        self
+    }
 }
 
 impl<RouterAddr: ToSocketAddrs + Clone> AdsBuilder<RouterAddr> {
