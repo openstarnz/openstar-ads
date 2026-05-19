@@ -135,12 +135,13 @@ impl Client {
         source: Option<AmsAddr>,
         timeouts: Timeouts,
     ) -> Result<Arc<Self>> {
+        let socket_future = TcpStream::connect(router_addr);
         let mut socket: TcpStream = if let Some(timeout) = timeouts.connect {
             let result: TimeoutResult<io::Result<TcpStream>> =
-                tokio::time::timeout(timeout, TcpStream::connect(router_addr)).await;
+                tokio::time::timeout(timeout, socket_future).await;
             result.ctx("establishing connection to remote ADS router (with timeout)")?
         } else {
-            let result: io::Result<TcpStream> = TcpStream::connect(router_addr).await;
+            let result: io::Result<TcpStream> = socket_future.await;
             result.ctx("establishing connection to remote ADS router")?
         };
 
@@ -163,22 +164,28 @@ impl Client {
             None => {
                 let request_port_msg = [0, 16, 2, 0, 0, 0, 0, 0];
                 let mut reply = [0; 14];
-                if let Some(timeout) = timeouts.write {
-                    let result: TimeoutResult<io::Result<_>> =
-                        tokio::time::timeout(timeout, socket.write_all(&request_port_msg)).await;
-                    result.ctx("requesting port from router (with timeout)")?;
-                } else {
-                    let result: io::Result<_> = socket.write_all(&request_port_msg).await;
-                    result.ctx("requesting port from router")?;
+                {
+                    let future = socket.write_all(&request_port_msg);
+                    if let Some(timeout) = timeouts.write {
+                        let result: TimeoutResult<io::Result<_>> =
+                            tokio::time::timeout(timeout, future).await;
+                        result.ctx("requesting port from router (with timeout)")?;
+                    } else {
+                        let result: io::Result<_> = future.await;
+                        result.ctx("requesting port from router")?;
+                    }
                 }
 
-                if let Some(timeout) = timeouts.read {
-                    let result: TimeoutResult<io::Result<_>> =
-                        tokio::time::timeout(timeout, socket.read(&mut reply)).await;
-                    result.ctx("requesting port from router (with timeout)")?;
-                } else {
-                    let result: io::Result<_> = socket.read(&mut reply).await;
-                    result.ctx("requesting port from router")?;
+                {
+                    let future = socket.read(&mut reply);
+                    if let Some(timeout) = timeouts.read {
+                        let result: TimeoutResult<io::Result<_>> =
+                            tokio::time::timeout(timeout, future).await;
+                        result.ctx("requesting port from router (with timeout)")?;
+                    } else {
+                        let result: io::Result<_> = future.await;
+                        result.ctx("requesting port from router")?;
+                    }
                 }
 
                 if reply[..6] != [0, 16, 8, 0, 0, 0] {
@@ -472,13 +479,16 @@ impl Client {
         {
             let mut writer: MutexGuard<OwnedWriteHalf> = self.socket_writer.lock().await;
 
-            if let Some(timeout) = self.timeouts.write {
-                let result: TimeoutResult<io::Result<_>> =
-                    tokio::time::timeout(timeout, writer.write_all(&request_buf)).await;
-                result.ctx("dispatching assembled command payload (with timeout)")?;
-            } else {
-                let result: io::Result<_> = writer.write_all(&request_buf).await;
-                result.ctx("dispatching assembled command payload")?;
+            {
+                let future = writer.write_all(&request_buf);
+                if let Some(timeout) = self.timeouts.write {
+                    let result: TimeoutResult<io::Result<_>> =
+                        tokio::time::timeout(timeout, future).await;
+                    result.ctx("dispatching assembled command payload (with timeout)")?;
+                } else {
+                    let result: io::Result<_> = future.await;
+                    result.ctx("dispatching assembled command payload")?;
+                }
             }
         }
 
@@ -792,15 +802,17 @@ impl ClientReceiver {
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
-            if let Some(timeout) = read_timeout {
-                let result: TimeoutResult<io::Result<_>> =
-                    tokio::time::timeout(timeout, socket_rx.read_exact(&mut ads_header_buf[..6]))
-                        .await;
-                result.ctx("receiving AMS/TCP header (with timeout)")?;
-            } else {
-                let result: io::Result<_> = socket_rx.read_exact(&mut ads_header_buf[..6]).await;
-                result.ctx("receiving AMS/TCP header")?;
-            };
+            {
+                let future = socket_rx.read_exact(&mut ads_header_buf[..6]);
+                if let Some(timeout) = read_timeout {
+                    let result: TimeoutResult<io::Result<_>> =
+                        tokio::time::timeout(timeout, future).await;
+                    result.ctx("receiving AMS/TCP header (with timeout)")?;
+                } else {
+                    let result: io::Result<_> = future.await;
+                    result.ctx("receiving AMS/TCP header")?;
+                };
+            }
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
@@ -808,36 +820,33 @@ impl ClientReceiver {
                 0..=31 => {
                     let mut discard = [0u8; 31];
 
-                    if let Some(timeout) = read_timeout {
-                        let result: TimeoutResult<io::Result<_>> = tokio::time::timeout(
-                            timeout,
-                            socket_rx.read_exact(&mut discard[..packet_len as usize]),
-                        )
-                        .await;
-                        result.ctx("discarding bad data (with timeout)")?;
-                    } else {
-                        let result: io::Result<_> = socket_rx
-                            .read_exact(&mut discard[..packet_len as usize])
-                            .await;
-                        result.ctx("discarding bad data")?;
-                    };
+                    {
+                        let future = socket_rx.read_exact(&mut discard[..packet_len as usize]);
+                        if let Some(timeout) = read_timeout {
+                            let result: TimeoutResult<io::Result<_>> =
+                                tokio::time::timeout(timeout, future).await;
+                            result.ctx("discarding bad data (with timeout)")?;
+                        } else {
+                            let result: io::Result<_> = future.await;
+                            result.ctx("discarding bad data")?;
+                        };
+                    }
 
                     continue;
                 }
 
                 _ => {
-                    if let Some(timeout) = read_timeout {
-                        let result: TimeoutResult<io::Result<_>> = tokio::time::timeout(
-                            timeout,
-                            socket_rx.read_exact(&mut ads_header_buf[6..]),
-                        )
-                        .await;
-                        result.ctx("receiving AMS header (with timeout)")?;
-                    } else {
-                        let result: io::Result<_> =
-                            socket_rx.read_exact(&mut ads_header_buf[6..]).await;
-                        result.ctx("receiving AMS header")?;
-                    };
+                    {
+                        let future = socket_rx.read_exact(&mut ads_header_buf[6..]);
+                        if let Some(timeout) = read_timeout {
+                            let result: TimeoutResult<io::Result<_>> =
+                                tokio::time::timeout(timeout, future).await;
+                            result.ctx("receiving AMS header (with timeout)")?;
+                        } else {
+                            let result: io::Result<_> = future.await;
+                            result.ctx("receiving AMS header")?;
+                        };
+                    }
 
                     AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
                         .map_err(|_| std::io::ErrorKind::InvalidData.into())
@@ -849,14 +858,17 @@ impl ClientReceiver {
 
             let mut payload_buf = BytesMut::zeroed(payload_len as usize);
 
-            if let Some(timeout) = read_timeout {
-                let result: TimeoutResult<io::Result<_>> =
-                    tokio::time::timeout(timeout, socket_rx.read_exact(&mut payload_buf)).await;
-                result.ctx("receiving Ads data payload (with timeout)")?;
-            } else {
-                let result: io::Result<_> = socket_rx.read_exact(&mut payload_buf).await;
-                result.ctx("receiving Ads data payload")?;
-            };
+            {
+                let future = socket_rx.read_exact(&mut payload_buf);
+                if let Some(timeout) = read_timeout {
+                    let result: TimeoutResult<io::Result<_>> =
+                        tokio::time::timeout(timeout, future).await;
+                    result.ctx("receiving Ads data payload (with timeout)")?;
+                } else {
+                    let result: io::Result<_> = future.await;
+                    result.ctx("receiving Ads data payload")?;
+                };
+            }
 
             // Reserved bytes should be well-known
             // Anything else might be invalid data
