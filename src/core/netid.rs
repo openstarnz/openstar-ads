@@ -2,12 +2,10 @@
 
 use std::convert::TryInto;
 use std::fmt::{self, Display};
-use std::io::{Read, Write};
 use std::net::Ipv4Addr;
 use std::num::ParseIntError;
 use std::str::FromStr;
 
-use byteorder::{ReadBytesExt, WriteBytesExt, LE};
 use itertools::Itertools;
 use zerocopy::{FromBytes, Immutable, IntoBytes};
 
@@ -113,20 +111,6 @@ impl AmsAddr {
     /// Return the port of this address.
     pub const fn port(&self) -> AmsPort {
         self.1
-    }
-
-    /// Write the NetID to a stream.
-    pub fn write_to<W: Write>(&self, w: &mut W) -> std::io::Result<()> {
-        w.write_all(&(self.0).0)?;
-        w.write_u16::<LE>(self.1)
-    }
-
-    /// Read the NetID from a stream.
-    pub fn read_from<R: Read>(r: &mut R) -> std::io::Result<Self> {
-        let mut netid = [0; 6];
-        r.read_exact(&mut netid)?;
-        let port = r.read_u16::<LE>()?;
-        Ok(Self(AmsNetId(netid), port))
     }
 }
 
