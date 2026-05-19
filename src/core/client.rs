@@ -20,6 +20,7 @@ use tokio::{
     sync::{mpsc, oneshot, Mutex, MutexGuard},
     task::JoinHandle,
 };
+use tracing::warn;
 use zerocopy::{
     little_endian::{U16, U32},
     FromBytes, FromZeros, Immutable, IntoBytes,
@@ -957,8 +958,12 @@ impl ClientReceiver {
 
                     if let Some(client) = client.upgrade() {
                         for handle in dropped_subscribers {
-                            // TODO: Do we need to handle these errors?
-                            let _ = client.delete_notification(handle).await;
+                            let client = client.clone();
+                            tokio::spawn(async move {
+                                if let Err(error) = client.delete_notification(handle).await {
+                                    warn!("Failed to delete notification after subscriber dropped: {error}")
+                                }
+                            });
                         }
                     }
                 }
