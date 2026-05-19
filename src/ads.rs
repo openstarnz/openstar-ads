@@ -144,7 +144,7 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
     }
 
     /// Disconnects the internal ADS client
-    pub async fn disconnect(&self) -> Result<()> {
+    pub async fn disconnect(&self) {
         {
             let mut symbol_handles = self.symbol_handles.lock().await;
             symbol_handles.clear()
@@ -152,10 +152,8 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
 
         {
             let mut connection = self.connection.lock().await;
-            connection.disconnect().await?;
+            connection.disconnect().await;
         }
-
-        Ok(())
     }
 
     pub async fn is_connected(&self) -> bool {

@@ -34,7 +34,7 @@ impl AdsConnection {
         Ok(())
     }
 
-    pub async fn disconnect(&mut self) -> Result<()> {
+    pub async fn disconnect(&mut self) {
         match self {
             AdsConnection::Connected(client) => {
                 client.close().await;
@@ -47,8 +47,6 @@ impl AdsConnection {
                 // Already disconnected...
             }
         }
-
-        Ok(())
     }
 
     pub fn client(&self) -> Option<Arc<core::Client>> {
