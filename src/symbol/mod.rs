@@ -141,7 +141,7 @@ mod tests {
 
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
 
-        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+        let symbol_map = SymbolMap::from_bytes(&data, &symbol_type_map);
 
         let expected = indexmap::indexmap! {
             "true".to_string() => PrimitiveValue::Bool(true),
@@ -174,7 +174,7 @@ mod tests {
 
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
 
-        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+        let symbol_map = SymbolMap::from_bytes(&data, &symbol_type_map);
 
         let expected = indexmap::indexmap! {
             "utf8".to_string() => PrimitiveValue::String("Test string".to_string()),
@@ -200,7 +200,7 @@ mod tests {
 
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
 
-        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+        let symbol_map = SymbolMap::from_bytes(&data, &symbol_type_map);
 
         let expected = indexmap::indexmap! {
             "f64".to_string() => PrimitiveValue::Float(1.23f64),
@@ -228,7 +228,7 @@ mod tests {
 
         let symbol_type_map = SymbolTypeMap::from_tree(symbol_type_tree, 0, "".to_string());
 
-        let symbol_map = SymbolMap::from_bytes(&symbol_type_map, &data);
+        let symbol_map = SymbolMap::from_bytes(&data, &symbol_type_map);
 
         let expected = indexmap::indexmap! {
             "u128".to_string() => PrimitiveValue::Void(vec![1u8, 2u8, 3u8, 4u8, 5u8, 6u8, 7u8, 8u8, 9u8, 10u8, 11u8, 12u8, 13u8, 14u8, 15u8, 16u8])
