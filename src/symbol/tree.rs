@@ -1,7 +1,8 @@
-use super::symbol_type_tree::SymbolTypeTree;
+use super::type_tree::SymbolTypeTree;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
+use tracing::warn;
 use zerocopy::FromBytes;
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,10 +30,14 @@ pub enum SymbolTree {
     Unknown,
 }
 
-impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
-    fn from((symbol_type_tree, data, parent_offset): (&SymbolTypeTree, &[u8], usize)) -> Self {
+impl SymbolTree {
+    pub fn from_bytes(
+        data: &[u8],
+        symbol_type_tree: &SymbolTypeTree,
+        parent_offset: usize,
+    ) -> Self {
         if parent_offset > data.len() {
-            println!(
+            warn!(
                 "Offset of {parent_offset} greater than data length of {}.",
                 data.len()
             );
@@ -47,7 +52,11 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                         let child_offset = *offset as usize;
                         tree_map.insert(
                             name.clone(),
-                            (field_type_tree, data, parent_offset + child_offset).into(),
+                            SymbolTree::from_bytes(
+                                data,
+                                field_type_tree,
+                                parent_offset + child_offset,
+                            ),
                         );
                     } else {
                         tree_map.insert(name.clone(), Self::Missing);
@@ -61,44 +70,44 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
             }
             SymbolTypeTree::Void(size) => Self::Void(accessible_data[0..*size].to_vec()),
             SymbolTypeTree::Int => match i16::read_from_prefix(accessible_data) {
-                Some(num) => Self::Int(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Int(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Dint => match i32::read_from_prefix(accessible_data) {
-                Some(num) => Self::Dint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Dint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Real => match f32::read_from_prefix(accessible_data) {
-                Some(num) => Self::Real(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Real(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Lreal => match f64::read_from_prefix(accessible_data) {
-                Some(num) => Self::Lreal(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Lreal(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Sint => match i8::read_from_prefix(accessible_data) {
-                Some(num) => Self::Sint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Sint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Usint => match u8::read_from_prefix(accessible_data) {
-                Some(num) => Self::Usint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Usint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Uint => match u16::read_from_prefix(accessible_data) {
-                Some(num) => Self::Uint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Uint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Udint => match u32::read_from_prefix(accessible_data) {
-                Some(num) => Self::Udint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Udint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Lint => match i64::read_from_prefix(accessible_data) {
-                Some(num) => Self::Lint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Lint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Ulint => match u64::read_from_prefix(accessible_data) {
-                Some(num) => Self::Ulint(num),
-                None => Self::Malformed,
+                Ok((num, _)) => Self::Ulint(num),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::String(size) => Self::String(
                 String::from_utf8_lossy(&accessible_data.to_vec()[0..*size]).to_string(),
@@ -109,7 +118,7 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                 }
                 let mut words = Vec::new();
                 for i in (0..*size).step_by(2) {
-                    let Some(word) = u16::read_from(&accessible_data[i..i + 2]) else {
+                    let Ok(word) = u16::read_from_bytes(&accessible_data[i..i + 2]) else {
                         // If there is somehow not enough bytes in the data then the data is malformed.
                         return Self::Malformed;
                     };
@@ -119,7 +128,7 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                 Self::String(String::from_utf16_lossy(&words).to_string())
             }
             SymbolTypeTree::Real80 => {
-                if data.len() < 10 {
+                if accessible_data.len() < 10 {
                     return Self::Malformed;
                 }
                 let mut buffer: [u8; 10] = [0; 10];
@@ -130,9 +139,9 @@ impl From<(&SymbolTypeTree, &[u8], usize)> for SymbolTree {
                 // TODO: Use actual extended value and figure out serde for that.
                 Self::Real80(extended::Extended::from_le_bytes(buffer).to_f64())
             }
-            SymbolTypeTree::Bool => match u8::read_from(accessible_data) {
-                Some(num) => Self::Bool(num != 0),
-                None => Self::Malformed,
+            SymbolTypeTree::Bool => match u8::read_from_prefix(accessible_data) {
+                Ok((num, _)) => Self::Bool(num != 0),
+                Err(_error) => Self::Malformed,
             },
             SymbolTypeTree::Compound(_) => Self::Malformed,
             SymbolTypeTree::Unknown(_) => Self::Unknown,
@@ -162,25 +171,25 @@ impl SymbolTree {
 
     pub fn get_timestamp(&self, path: &str) -> Option<DateTime<Utc>> {
         if let SymbolTree::Struct(map) = self.get_child(path) {
-            let SymbolTree::Uint(year) = *map.get("year")? else {
+            let SymbolTree::Uint(year) = *map.get("wYear")? else {
                 return None;
             };
-            let SymbolTree::Uint(month) = *map.get("month")? else {
+            let SymbolTree::Uint(month) = *map.get("wMonth")? else {
                 return None;
             };
-            let SymbolTree::Uint(day) = *map.get("day")? else {
+            let SymbolTree::Uint(day) = *map.get("wDay")? else {
                 return None;
             };
-            let SymbolTree::Uint(hour) = *map.get("hour")? else {
+            let SymbolTree::Uint(hour) = *map.get("wHour")? else {
                 return None;
             };
-            let SymbolTree::Uint(minute) = *map.get("minute")? else {
+            let SymbolTree::Uint(minute) = *map.get("wMinute")? else {
                 return None;
             };
-            let SymbolTree::Uint(second) = *map.get("second")? else {
+            let SymbolTree::Uint(second) = *map.get("wSecond")? else {
                 return None;
             };
-            let SymbolTree::Uint(milliseconds) = *map.get("milliseconds")? else {
+            let SymbolTree::Uint(milliseconds) = *map.get("wMilliseconds")? else {
                 return None;
             };
 

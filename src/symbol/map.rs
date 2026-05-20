@@ -3,9 +3,10 @@ use std::fmt::Display;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
-use zerocopy::FromBytes;
+use zerocopy::{FromBytes, SizeError};
 
-use crate::data_types::symbol_type_tree::SymbolTypeTree;
+use crate::symbol::SymbolTypeTree;
+
 pub type SymbolPath = String;
 pub type SymbolOffset = u32;
 pub type SymbolMap = IndexMap<SymbolPath, PrimitiveValue>;
@@ -46,8 +47,8 @@ pub struct PrimitiveSymbolDescriptor {
     root_symbol_offset: SymbolOffset,
 }
 
-impl From<(PrimitiveSymbolType, SymbolOffset)> for PrimitiveSymbolDescriptor {
-    fn from((symbol_type, offset): (PrimitiveSymbolType, SymbolOffset)) -> Self {
+impl PrimitiveSymbolDescriptor {
+    pub fn from_type(symbol_type: PrimitiveSymbolType, offset: SymbolOffset) -> Self {
         PrimitiveSymbolDescriptor {
             symbol_type,
             root_symbol_offset: offset,
@@ -116,7 +117,10 @@ impl SymbolTypeMapExt for SymbolTypeMap {
                     }
                     map.insert(
                         path,
-                        (PrimitiveSymbolType::TimeStruct(offsets), offset).into(),
+                        PrimitiveSymbolDescriptor::from_type(
+                            PrimitiveSymbolType::TimeStruct(offsets),
+                            offset,
+                        ),
                     );
                 } else {
                     for (child_path, (child_tree, child_offset)) in index_map {
@@ -139,58 +143,112 @@ impl SymbolTypeMapExt for SymbolTypeMap {
                 }
             }
             SymbolTypeTree::Int => {
-                map.insert(path, (PrimitiveSymbolType::Int, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Int, offset),
+                );
             }
             SymbolTypeTree::Dint => {
-                map.insert(path, (PrimitiveSymbolType::Dint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Dint, offset),
+                );
             }
             SymbolTypeTree::Real => {
-                map.insert(path, (PrimitiveSymbolType::Real, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Real, offset),
+                );
             }
             SymbolTypeTree::Lreal => {
-                map.insert(path, (PrimitiveSymbolType::Lreal, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Lreal, offset),
+                );
             }
             SymbolTypeTree::Sint => {
-                map.insert(path, (PrimitiveSymbolType::Sint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Sint, offset),
+                );
             }
             SymbolTypeTree::Usint => {
-                map.insert(path, (PrimitiveSymbolType::Usint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Usint, offset),
+                );
             }
             SymbolTypeTree::Uint => {
-                map.insert(path, (PrimitiveSymbolType::Uint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Uint, offset),
+                );
             }
             SymbolTypeTree::Udint => {
-                map.insert(path, (PrimitiveSymbolType::Udint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Udint, offset),
+                );
             }
             SymbolTypeTree::Lint => {
-                map.insert(path, (PrimitiveSymbolType::Lint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Lint, offset),
+                );
             }
             SymbolTypeTree::Ulint => {
-                map.insert(path, (PrimitiveSymbolType::Ulint, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Ulint, offset),
+                );
             }
             SymbolTypeTree::String(size) => {
-                map.insert(path, (PrimitiveSymbolType::String(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::String(size), offset),
+                );
             }
             SymbolTypeTree::Wstring(size) => {
-                map.insert(path, (PrimitiveSymbolType::Wstring(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(
+                        PrimitiveSymbolType::Wstring(size),
+                        offset,
+                    ),
+                );
             }
             SymbolTypeTree::Real80 => {
-                map.insert(path, (PrimitiveSymbolType::Real80, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Real80, offset),
+                );
             }
             SymbolTypeTree::Bool => {
-                map.insert(path, (PrimitiveSymbolType::Bool, offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Bool, offset),
+                );
             }
             // This is not implemented yet as getting the type the Array contains is elusive
             // Converts to void so that the consumer can attempt to retrieve the data
             SymbolTypeTree::Array(_symbol_type_tree, size) => {
-                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Void(size), offset),
+                );
             }
             SymbolTypeTree::Void(size) => {
-                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Void(size), offset),
+                );
             }
             // Converts to void so that the consumer can attempt to retrieve the data
             SymbolTypeTree::Unknown(size) => {
-                map.insert(path, (PrimitiveSymbolType::Void(size), offset).into());
+                map.insert(
+                    path,
+                    PrimitiveSymbolDescriptor::from_type(PrimitiveSymbolType::Void(size), offset),
+                );
             }
             // This is a conversion type and represents that
             SymbolTypeTree::Compound(_) => {
@@ -205,24 +263,29 @@ impl SymbolTypeMapExt for SymbolTypeMap {
 }
 
 impl PrimitiveSymbolDescriptor {
-    fn datetime_from_bytes(offsets: [usize; 8], bytes: &[u8]) -> Option<DateTime<Utc>> {
-        let year = u16::read_from_prefix(&bytes[offsets[0]..])?;
-        let month = u16::read_from_prefix(&bytes[offsets[1]..])?;
-        let day = u16::read_from_prefix(&bytes[offsets[3]..])?;
-        let hour = u16::read_from_prefix(&bytes[offsets[4]..])?;
-        let minute = u16::read_from_prefix(&bytes[offsets[5]..])?;
-        let second = u16::read_from_prefix(&bytes[offsets[6]..])?;
-        let milliseconds = u16::read_from_prefix(&bytes[offsets[7]..])?;
+    fn datetime_from_bytes(
+        offsets: [usize; 8],
+        bytes: &[u8],
+    ) -> Result<Option<DateTime<Utc>>, SizeError<&[u8], u16>> {
+        let (year, _) = u16::read_from_prefix(&bytes[offsets[0]..])?;
+        let (month, _) = u16::read_from_prefix(&bytes[offsets[1]..])?;
+        let (day, _) = u16::read_from_prefix(&bytes[offsets[3]..])?;
+        let (hour, _) = u16::read_from_prefix(&bytes[offsets[4]..])?;
+        let (minute, _) = u16::read_from_prefix(&bytes[offsets[5]..])?;
+        let (second, _) = u16::read_from_prefix(&bytes[offsets[6]..])?;
+        let (milliseconds, _) = u16::read_from_prefix(&bytes[offsets[7]..])?;
 
-        NaiveDate::from_ymd_opt(year.into(), month.into(), day.into()).and_then(|date| {
-            date.and_hms_milli_opt(
-                hour.into(),
-                minute.into(),
-                second.into(),
-                milliseconds.into(),
-            )
-            .map(|datetime| datetime.and_utc())
-        })
+        Ok(
+            NaiveDate::from_ymd_opt(year.into(), month.into(), day.into()).and_then(|date| {
+                date.and_hms_milli_opt(
+                    hour.into(),
+                    minute.into(),
+                    second.into(),
+                    milliseconds.into(),
+                )
+                .map(|datetime| datetime.and_utc())
+            }),
+        )
     }
 
     pub fn read_from_bytes(&self, bytes: &[u8]) -> PrimitiveValue {
@@ -230,56 +293,56 @@ impl PrimitiveSymbolDescriptor {
         match self.symbol_type {
             PrimitiveSymbolType::TimeStruct(offsets) => {
                 match Self::datetime_from_bytes(offsets, accessible_data) {
-                    Some(datetime) => PrimitiveValue::Timestamp(datetime),
-                    None => PrimitiveValue::Malformed,
+                    Ok(Some(datetime)) => PrimitiveValue::Timestamp(datetime),
+                    Err(_) | Ok(None) => PrimitiveValue::Malformed,
                 }
             }
             PrimitiveSymbolType::Real => match f32::read_from_prefix(accessible_data) {
-                Some(float) => PrimitiveValue::Float(float as f64),
-                None => PrimitiveValue::Malformed,
+                Ok((float, _)) => PrimitiveValue::Float(float as f64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Lreal => match f64::read_from_prefix(accessible_data) {
-                Some(float) => PrimitiveValue::Float(float),
-                None => PrimitiveValue::Malformed,
+                Ok((float, _)) => PrimitiveValue::Float(float),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Sint => match i8::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer as i64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Int => match i16::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer as i64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Dint => match i32::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer as i64),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer as i64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Lint => match i64::read_from_prefix(accessible_data) {
-                Some(integer) => PrimitiveValue::Int(integer),
-                None => PrimitiveValue::Malformed,
+                Ok((integer, _)) => PrimitiveValue::Int(integer),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Usint => match u8::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger as u64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Uint => match u16::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger as u64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Udint => match u32::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger as u64),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger as u64),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Ulint => match u64::read_from_prefix(accessible_data) {
-                Some(uinteger) => PrimitiveValue::Uint(uinteger),
-                None => PrimitiveValue::Malformed,
+                Ok((uinteger, _)) => PrimitiveValue::Uint(uinteger),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::String(size) => PrimitiveValue::String(
                 String::from_utf8_lossy(&accessible_data.to_vec()[0..size]).to_string(),
             ),
             PrimitiveSymbolType::Bool => match u8::read_from_prefix(accessible_data) {
-                Some(num) => PrimitiveValue::Bool(num != 0),
-                None => PrimitiveValue::Malformed,
+                Ok((num, _)) => PrimitiveValue::Bool(num != 0),
+                Err(_error) => PrimitiveValue::Malformed,
             },
             PrimitiveSymbolType::Wstring(size) => {
                 if size % 2 != 0 {
@@ -287,7 +350,7 @@ impl PrimitiveSymbolDescriptor {
                 }
                 let mut words = Vec::new();
                 for i in (0..size).step_by(2) {
-                    let Some(word) = u16::read_from(&accessible_data[i..i + 2]) else {
+                    let Ok(word) = u16::read_from_bytes(&accessible_data[i..i + 2]) else {
                         // If there is somehow not enough bytes in the data then the data is malformed.
                         return PrimitiveValue::Malformed;
                     };
@@ -297,7 +360,7 @@ impl PrimitiveSymbolDescriptor {
                 PrimitiveValue::String(String::from_utf16_lossy(&words).to_string())
             }
             PrimitiveSymbolType::Real80 => {
-                if bytes.len() < 10 {
+                if accessible_data.len() < 10 {
                     return PrimitiveValue::Malformed;
                 }
                 let mut buffer: [u8; 10] = [0; 10];
@@ -316,11 +379,11 @@ impl PrimitiveSymbolDescriptor {
 }
 
 pub trait SymbolMapExt {
-    fn from_bytes(symbol_type_map: &SymbolTypeMap, bytes: &[u8]) -> Self;
+    fn from_bytes(bytes: &[u8], symbol_type_map: &SymbolTypeMap) -> Self;
 }
 
 impl SymbolMapExt for SymbolMap {
-    fn from_bytes(symbol_type_map: &SymbolTypeMap, bytes: &[u8]) -> SymbolMap {
+    fn from_bytes(bytes: &[u8], symbol_type_map: &SymbolTypeMap) -> SymbolMap {
         let mut map = SymbolMap::new();
         for (path, symbol_descriptor) in symbol_type_map {
             map.insert(path.to_string(), symbol_descriptor.read_from_bytes(bytes));

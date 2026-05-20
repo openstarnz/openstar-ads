@@ -1,0 +1,56 @@
+use crate::data_types::AdsData;
+
+/// A magic trait for parameters to RPC methods.
+///
+/// If you think this is odd, here is [a similar magic trait that powers axum][axum-magic].
+///
+/// [axum-magic]: https://docs.rs/axum/latest/axum/extract/trait.FromRequest.html
+pub trait AdsParams {
+    fn into_data(self) -> Vec<u8>;
+}
+
+impl<P1: AdsData> AdsParams for P1 {
+    fn into_data(self) -> Vec<u8> {
+        self.as_bytes().to_owned()
+    }
+}
+
+impl<P1: AdsData, P2: AdsData> AdsParams for (P1, P2) {
+    fn into_data(self) -> Vec<u8> {
+        let data_1 = self.0.as_bytes();
+        let data_2 = self.1.as_bytes();
+        [data_1, data_2].concat()
+    }
+}
+
+impl<P1: AdsData, P2: AdsData, P3: AdsData> AdsParams for (P1, P2, P3) {
+    fn into_data(self) -> Vec<u8> {
+        let data_1 = self.0.as_bytes();
+        let data_2 = self.1.as_bytes();
+        let data_3 = self.2.as_bytes();
+        [data_1, data_2, data_3].concat()
+    }
+}
+
+impl<P1: AdsData, P2: AdsData, P3: AdsData, P4: AdsData> AdsParams for (P1, P2, P3, P4) {
+    fn into_data(self) -> Vec<u8> {
+        let data_1 = self.0.as_bytes();
+        let data_2 = self.1.as_bytes();
+        let data_3 = self.2.as_bytes();
+        let data_4 = self.3.as_bytes();
+        [data_1, data_2, data_3, data_4].concat()
+    }
+}
+
+impl<P1: AdsData, P2: AdsData, P3: AdsData, P4: AdsData, P5: AdsData> AdsParams
+    for (P1, P2, P3, P4, P5)
+{
+    fn into_data(self) -> Vec<u8> {
+        let data_1 = self.0.as_bytes();
+        let data_2 = self.1.as_bytes();
+        let data_3 = self.2.as_bytes();
+        let data_4 = self.3.as_bytes();
+        let data_5 = self.4.as_bytes();
+        [data_1, data_2, data_3, data_4, data_5].concat()
+    }
+}
