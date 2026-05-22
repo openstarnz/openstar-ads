@@ -1,7 +1,9 @@
 use bytes::Bytes;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug, time::Duration};
+use tokio::io;
+use tokio::net::lookup_host;
 use tokio::sync::mpsc;
 use tokio::{net::ToSocketAddrs, sync::Mutex, time::sleep};
 use tracing::{error, info, warn};
@@ -71,22 +73,23 @@ impl<RouterAddr> AdsBuilder<RouterAddr> {
     }
 }
 
-impl<RouterAddr: ToSocketAddrs + Clone> AdsBuilder<RouterAddr> {
-    pub fn build(self) -> Ads<RouterAddr> {
-        Ads::new(
+impl<RouterAddr: ToSocketAddrs> AdsBuilder<RouterAddr> {
+    pub async fn build(self) -> io::Result<Ads> {
+        Ads::new::<RouterAddr>(
             self.router,
             self.target,
             self.source,
             self.timeouts,
             self.set_to_run_mode,
         )
+        .await
     }
 }
 
 /// The top-level abstraction to interact with the OpenStar ADS PLC's.
 #[derive(Debug, Clone)]
-pub struct Ads<RouterAddr> {
-    router: RouterAddr,
+pub struct Ads {
+    router_addresses: Vec<SocketAddr>,
     target: AmsAddr,
     source: Option<AmsAddr>,
     timeouts: Timeouts,
@@ -95,26 +98,26 @@ pub struct Ads<RouterAddr> {
     symbol_handles: Arc<Mutex<HashMap<String, SymbolHandle>>>,
 }
 
-impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
+impl Ads {
     /// Create a new [`Ads`].
     ///
     /// Recommended to use [`AdsBuilder`].
-    pub fn new(
-        router: RouterAddr,
+    pub async fn new<R: ToSocketAddrs>(
+        router: R,
         target: AmsAddr,
         source: Option<AmsAddr>,
         timeouts: Timeouts,
         set_to_run_mode: bool,
-    ) -> Self {
-        Self {
-            router,
+    ) -> io::Result<Self> {
+        Ok(Self {
+            router_addresses: lookup_host(router).await.unwrap().collect(),
             target,
             source,
             timeouts,
             set_to_run_mode,
             connection: Default::default(),
             symbol_handles: Default::default(),
-        }
+        })
     }
 
     /// Connect to a PLC over ADS, retry on failure.
@@ -122,7 +125,12 @@ impl<RouterAddr: ToSocketAddrs + Clone> Ads<RouterAddr> {
         {
             let mut connection = self.connection.lock().await;
             connection
-                .connect(self.router.clone(), self.target, self.source, self.timeouts)
+                .connect(
+                    self.router_addresses.as_slice(),
+                    self.target,
+                    self.source,
+                    self.timeouts,
+                )
                 .await?;
         }
 

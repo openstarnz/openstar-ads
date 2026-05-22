@@ -47,7 +47,9 @@
 //!     let ads = AdsBuilder::new(target_addr)
 //!         .router(router_addr)
 //!         .source(source_addr)
-//!         .build();
+//!         .build()
+//!         .await
+//!         .unwrap();
 //!
 //!     let symbol_type_tree = ads.get_dynamic_type_tree("MAIN.example").await?;
 //!     let symbol_type_tree = symbol_type_tree.get_child("status").clone();
