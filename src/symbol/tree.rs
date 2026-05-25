@@ -2,6 +2,7 @@ use super::type_tree::SymbolTypeTree;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
 use serde::Serialize;
+use serde_json::{Map, Number, Value};
 use tracing::warn;
 use zerocopy::FromBytes;
 
@@ -205,5 +206,135 @@ impl SymbolTree {
         } else {
             None
         }
+    }
+}
+
+pub fn into_json_value(
+    data: &[u8],
+    symbol_type_tree: &SymbolTypeTree,
+    parent_offset: usize,
+) -> Option<Value> {
+    if parent_offset > data.len() {
+        warn!(
+            "Offset of {parent_offset} greater than data length of {}.",
+            data.len()
+        );
+        return None;
+    }
+    let accessible_data = &data[parent_offset..];
+    match symbol_type_tree {
+        SymbolTypeTree::Struct(tree_type_map, _) => {
+            let mut tree_map = Map::new();
+            for (name, (field_type_tree, offset)) in tree_type_map {
+                if let Some(offset) = offset {
+                    let child_offset = *offset as usize;
+                    if let Some(value) =
+                        into_json_value(data, field_type_tree, parent_offset + child_offset)
+                    {
+                        tree_map.insert(name.clone(), value);
+                    }
+                }
+            }
+            Some(Value::Object(tree_map))
+        }
+        // Arrays are not implemented fully but this will at least provide the raw data.
+        SymbolTypeTree::Array(_symbol_type_tree, size) => Some(Value::Array(
+            accessible_data[0..*size]
+                .iter()
+                .map(|byte| Value::Number((*byte).into()))
+                .collect(),
+        )),
+        SymbolTypeTree::Void(size) => Some(Value::Array(
+            accessible_data[0..*size]
+                .iter()
+                .map(|byte| Value::Number((*byte).into()))
+                .collect(),
+        )),
+        SymbolTypeTree::Int => match i16::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Dint => match i32::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Real => match f32::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(match Number::from_f64(num as f64) {
+                Some(num) => Value::Number(num),
+                None => Value::Null,
+            }),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Lreal => match f64::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(match Number::from_f64(num) {
+                Some(num) => Value::Number(num),
+                None => Value::Null,
+            }),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Sint => match i8::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Usint => match u8::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Uint => match u16::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Udint => match u32::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Lint => match i64::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Ulint => match u64::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Number(num.into())),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::String(size) => Some(Value::String(
+            String::from_utf8_lossy(&accessible_data.to_vec()[0..*size]).to_string(),
+        )),
+        SymbolTypeTree::Wstring(size) => {
+            if size % 2 != 0 {
+                return None;
+            }
+            let mut words = Vec::new();
+            for i in (0..*size).step_by(2) {
+                let Ok(word) = u16::read_from_bytes(&accessible_data[i..i + 2]) else {
+                    // If there is somehow not enough bytes in the data then the data is malformed.
+                    return None;
+                };
+                words.push(word);
+            }
+
+            Some(Value::String(String::from_utf16_lossy(&words).to_string()))
+        }
+        SymbolTypeTree::Real80 => {
+            if accessible_data.len() < 10 {
+                return None;
+            }
+            let mut buffer: [u8; 10] = [0; 10];
+            buffer.copy_from_slice(&accessible_data[0..10]);
+
+            // The beckhoff PLC system uses little endian byte order
+            // https://infosys.beckhoff.com/english.php?content=../content/1033/tcplclib_tc2_utilities/35311883.html&id=
+            // TODO: Use actual extended value and figure out serde for that.
+            match Number::from_f64(extended::Extended::from_le_bytes(buffer).to_f64()) {
+                Some(num) => Some(Value::Number(num)),
+                None => Some(Value::Null),
+            }
+        }
+        SymbolTypeTree::Bool => match u8::read_from_prefix(accessible_data) {
+            Ok((num, _)) => Some(Value::Bool(num != 0)),
+            Err(_error) => None,
+        },
+        SymbolTypeTree::Compound(_) => None,
+        SymbolTypeTree::Unknown(_) => None,
+        SymbolTypeTree::Missing => None,
     }
 }
