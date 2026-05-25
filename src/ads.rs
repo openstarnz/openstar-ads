@@ -110,7 +110,7 @@ impl Ads {
         set_to_run_mode: bool,
     ) -> io::Result<Self> {
         Ok(Self {
-            router_addresses: lookup_host(router).await.unwrap().collect(),
+            router_addresses: lookup_host(router).await?.collect(),
             target,
             source,
             timeouts,
