@@ -102,8 +102,8 @@ impl Ads {
     /// Create a new [`Ads`].
     ///
     /// Recommended to use [`AdsBuilder`].
-    pub async fn new<R: ToSocketAddrs>(
-        router: R,
+    pub async fn new<RouterAddr: ToSocketAddrs>(
+        router: RouterAddr,
         target: AmsAddr,
         source: Option<AmsAddr>,
         timeouts: Timeouts,
