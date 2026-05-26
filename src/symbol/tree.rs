@@ -1,8 +1,13 @@
+use std::fmt::Display;
+
 use super::type_tree::SymbolTypeTree;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
-use serde::Serialize;
-use serde_json::{Map, Number, Value};
+use serde::{
+    de::{MapAccess, SeqAccess},
+    forward_to_deserialize_any, Deserializer, Serialize,
+};
+use thiserror::Error;
 use tracing::warn;
 use zerocopy::FromBytes;
 
@@ -209,132 +214,131 @@ impl SymbolTree {
     }
 }
 
-pub fn into_json_value(
-    data: &[u8],
-    symbol_type_tree: &SymbolTypeTree,
-    parent_offset: usize,
-) -> Option<Value> {
-    if parent_offset > data.len() {
-        warn!(
-            "Offset of {parent_offset} greater than data length of {}.",
-            data.len()
-        );
-        return None;
+impl<'de> Deserializer<'de> for &SymbolTree {
+    type Error = Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        match self {
+            SymbolTree::Struct(index_map) => visitor.visit_map(MapAccessor::new(index_map)),
+            SymbolTree::Array(symbol_trees) => visitor.visit_seq(SeqAccessor::new(symbol_trees)),
+            SymbolTree::Int(v) => visitor.visit_i16(*v),
+            SymbolTree::Dint(v) => visitor.visit_i32(*v),
+            SymbolTree::Real(v) => visitor.visit_f32(*v),
+            SymbolTree::Lreal(v) => visitor.visit_f64(*v),
+            SymbolTree::Sint(v) => visitor.visit_i8(*v),
+            SymbolTree::Usint(v) => visitor.visit_u8(*v),
+            SymbolTree::Uint(v) => visitor.visit_u16(*v),
+            SymbolTree::Udint(v) => visitor.visit_u32(*v),
+            SymbolTree::Lint(v) => visitor.visit_i64(*v),
+            SymbolTree::Ulint(v) => visitor.visit_u64(*v),
+            SymbolTree::String(v) => visitor.visit_string(v.clone()),
+            SymbolTree::Real80(v) => visitor.visit_f64(*v),
+            SymbolTree::Bool(v) => visitor.visit_bool(*v),
+            SymbolTree::Unknown => visitor.visit_unit(),
+            SymbolTree::Void(_items) => Err(Error::Deserialisation(
+                "unable to deserialize SymbolTree::Void".to_owned(),
+            )),
+            SymbolTree::Missing => Err(Error::Deserialisation(
+                "unable to deserialize SymbolTree::Missing".to_owned(),
+            )),
+            SymbolTree::Malformed => Err(Error::Deserialisation(
+                "unable to deserialize SymbolTree::Malformed".to_owned(),
+            )),
+        }
     }
-    let accessible_data = &data[parent_offset..];
-    match symbol_type_tree {
-        SymbolTypeTree::Struct(tree_type_map, _) => {
-            let mut tree_map = Map::new();
-            for (name, (field_type_tree, offset)) in tree_type_map {
-                if let Some(offset) = offset {
-                    let child_offset = *offset as usize;
-                    if let Some(value) =
-                        into_json_value(data, field_type_tree, parent_offset + child_offset)
-                    {
-                        tree_map.insert(name.clone(), value);
-                    }
-                }
-            }
-            Some(Value::Object(tree_map))
-        }
-        // Arrays are not implemented fully but this will at least provide the raw data.
-        SymbolTypeTree::Array(_symbol_type_tree, size) => Some(Value::Array(
-            accessible_data[0..*size]
-                .iter()
-                .map(|byte| Value::Number((*byte).into()))
-                .collect(),
-        )),
-        SymbolTypeTree::Void(size) => Some(Value::Array(
-            accessible_data[0..*size]
-                .iter()
-                .map(|byte| Value::Number((*byte).into()))
-                .collect(),
-        )),
-        SymbolTypeTree::Int => match i16::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Dint => match i32::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Real => match f32::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(match Number::from_f64(num as f64) {
-                Some(num) => Value::Number(num),
-                None => Value::Null,
-            }),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Lreal => match f64::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(match Number::from_f64(num) {
-                Some(num) => Value::Number(num),
-                None => Value::Null,
-            }),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Sint => match i8::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Usint => match u8::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Uint => match u16::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Udint => match u32::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Lint => match i64::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Ulint => match u64::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Number(num.into())),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::String(size) => Some(Value::String(
-            String::from_utf8_lossy(&accessible_data.to_vec()[0..*size]).to_string(),
-        )),
-        SymbolTypeTree::Wstring(size) => {
-            if size % 2 != 0 {
-                return None;
-            }
-            let mut words = Vec::new();
-            for i in (0..*size).step_by(2) {
-                let Ok(word) = u16::read_from_bytes(&accessible_data[i..i + 2]) else {
-                    // If there is somehow not enough bytes in the data then the data is malformed.
-                    return None;
-                };
-                words.push(word);
-            }
 
-            Some(Value::String(String::from_utf16_lossy(&words).to_string()))
-        }
-        SymbolTypeTree::Real80 => {
-            if accessible_data.len() < 10 {
-                return None;
-            }
-            let mut buffer: [u8; 10] = [0; 10];
-            buffer.copy_from_slice(&accessible_data[0..10]);
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
+    }
+}
 
-            // The beckhoff PLC system uses little endian byte order
-            // https://infosys.beckhoff.com/english.php?content=../content/1033/tcplclib_tc2_utilities/35311883.html&id=
-            // TODO: Use actual extended value and figure out serde for that.
-            match Number::from_f64(extended::Extended::from_le_bytes(buffer).to_f64()) {
-                Some(num) => Some(Value::Number(num)),
-                None => Some(Value::Null),
-            }
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Couldn't deserialise symbol tree with message: {0:?}")]
+    Deserialisation(String),
+}
+
+impl serde::de::Error for Error {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        Self::Deserialisation(msg.to_string())
+    }
+}
+
+struct MapAccessor<'a> {
+    items: &'a IndexMap<String, SymbolTree>,
+    key_index: usize,
+}
+
+impl<'a> MapAccessor<'a> {
+    pub fn new(items: &'a IndexMap<String, SymbolTree>) -> Self {
+        Self {
+            items,
+            key_index: 0,
         }
-        SymbolTypeTree::Bool => match u8::read_from_prefix(accessible_data) {
-            Ok((num, _)) => Some(Value::Bool(num != 0)),
-            Err(_error) => None,
-        },
-        SymbolTypeTree::Compound(_) => None,
-        SymbolTypeTree::Unknown(_) => None,
-        SymbolTypeTree::Missing => None,
+    }
+}
+
+impl<'de: 'a, 'a> MapAccess<'de> for MapAccessor<'a> {
+    type Error = Error;
+
+    fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
+    where
+        K: serde::de::DeserializeSeed<'de>,
+    {
+        self.items
+            .get_index(self.key_index)
+            .map(|(key, _)| {
+                self.key_index += 1;
+                seed.deserialize(&SymbolTree::String(key.clone()))
+            })
+            .transpose()
+    }
+
+    fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::DeserializeSeed<'de>,
+    {
+        if let Some((_, value)) = self.items.get_index(self.key_index) {
+            return seed.deserialize(value);
+        }
+        Err(Error::Deserialisation(
+            "failed to get next value from map".to_owned(),
+        ))
+    }
+}
+
+struct SeqAccessor<'a> {
+    items: &'a Vec<SymbolTree>,
+    index: usize,
+}
+
+impl<'a> SeqAccessor<'a> {
+    fn new(items: &'a Vec<SymbolTree>) -> Self {
+        Self { items, index: 0 }
+    }
+}
+
+impl<'de: 'a, 'a> SeqAccess<'de> for SeqAccessor<'a> {
+    type Error = Error;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: serde::de::DeserializeSeed<'de>,
+    {
+        self.items
+            .get(self.index)
+            .map(|item| {
+                self.index += 1;
+                seed.deserialize(item)
+            })
+            .transpose()
     }
 }
