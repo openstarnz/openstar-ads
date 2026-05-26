@@ -250,9 +250,30 @@ impl<'de> Deserializer<'de> for &SymbolTree {
         }
     }
 
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        match self {
+            SymbolTree::Missing => visitor.visit_none(),
+            t => visitor.visit_some(t),
+        }
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        visitor.visit_newtype_struct(self)
+    }
+
     forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
-        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        bytes byte_buf unit unit_struct seq tuple
         tuple_struct map struct enum identifier ignored_any
     }
 }
@@ -286,7 +307,7 @@ impl<'a> MapAccessor<'a> {
     }
 }
 
-impl<'de: 'a, 'a> MapAccess<'de> for MapAccessor<'a> {
+impl<'a, 'de: 'a> MapAccess<'de> for MapAccessor<'a> {
     type Error = Error;
 
     fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
@@ -295,10 +316,7 @@ impl<'de: 'a, 'a> MapAccess<'de> for MapAccessor<'a> {
     {
         self.items
             .get_index(self.key_index)
-            .map(|(key, _)| {
-                self.key_index += 1;
-                seed.deserialize(&SymbolTree::String(key.clone()))
-            })
+            .map(|(key, _)| seed.deserialize(&SymbolTree::String(key.clone())))
             .transpose()
     }
 
@@ -307,6 +325,8 @@ impl<'de: 'a, 'a> MapAccess<'de> for MapAccessor<'a> {
         V: serde::de::DeserializeSeed<'de>,
     {
         if let Some((_, value)) = self.items.get_index(self.key_index) {
+            // Increment the key index only after the value has been retrieved
+            self.key_index += 1;
             return seed.deserialize(value);
         }
         Err(Error::Deserialisation(
@@ -326,7 +346,7 @@ impl<'a> SeqAccessor<'a> {
     }
 }
 
-impl<'de: 'a, 'a> SeqAccess<'de> for SeqAccessor<'a> {
+impl<'a, 'de: 'a> SeqAccess<'de> for SeqAccessor<'a> {
     type Error = Error;
 
     fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>

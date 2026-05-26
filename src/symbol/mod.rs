@@ -14,9 +14,11 @@ pub use self::type_tree::*;
 mod tests {
     use chrono::{DateTime, Datelike, Timelike, Utc};
     use indexmap::IndexMap;
+    use serde::Deserialize;
 
     use crate::symbol::{
-        PrimitiveValue, SymbolMap, SymbolMapExt, SymbolTypeMap, SymbolTypeMapExt, SymbolTypeTree,
+        PrimitiveValue, SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt,
+        SymbolTypeTree,
     };
 
     #[test]
@@ -217,8 +219,8 @@ mod tests {
         let mut data: Vec<u8> = Vec::new();
         void_symbol_map.insert("u128".to_string(), (SymbolTypeTree::Void(16), Some(0)));
 
-        // Designed to be bytes ascending from 1 to 16
         data.append(
+            // Designed to be bytes ascending from 1 to 16
             &mut 21345817372864405881847059188222722561u128
                 .to_le_bytes()
                 .to_vec(),
@@ -235,5 +237,69 @@ mod tests {
         };
 
         assert_eq!(symbol_map, expected);
+    }
+
+    #[test]
+    fn deserialize_struct_with_multiple_fields() {
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct TwoFields {
+            a: u16,
+            b: u16,
+        }
+
+        let mut map = IndexMap::new();
+        map.insert("a".into(), SymbolTree::Uint(1));
+        map.insert("b".into(), SymbolTree::Uint(2));
+        let tree = SymbolTree::Struct(map);
+
+        let result = TwoFields::deserialize(&tree).unwrap();
+        assert_eq!(result, TwoFields { a: 1, b: 2 });
+    }
+
+    #[test]
+    fn deserialize_missing_as_none() {
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct S {
+            x: Option<u16>,
+        }
+
+        let mut map = IndexMap::new();
+        map.insert("x".into(), SymbolTree::Missing);
+        let tree = SymbolTree::Struct(map);
+
+        let result = S::deserialize(&tree).unwrap();
+        assert_eq!(result, S { x: None });
+    }
+
+    #[test]
+    fn deserialize_present_option() {
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct S {
+            x: Option<u16>,
+        }
+
+        let mut map = IndexMap::new();
+        map.insert("x".into(), SymbolTree::Uint(5));
+        let tree = SymbolTree::Struct(map);
+
+        let result = S::deserialize(&tree).unwrap();
+        assert_eq!(result, S { x: Some(5) });
+    }
+
+    #[test]
+    fn deserialize_newtype_struct() {
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct Wrapper(u16);
+
+        let tree = SymbolTree::Uint(42);
+        let result = Wrapper::deserialize(&tree).unwrap();
+        assert_eq!(result, Wrapper(42));
+    }
+
+    #[test]
+    fn deserialize_array_seq() {
+        let tree = SymbolTree::Array(vec![SymbolTree::Uint(1), SymbolTree::Uint(2)]);
+        let v: Vec<u16> = Vec::deserialize(&tree).unwrap();
+        assert_eq!(v, vec![1, 2]);
     }
 }
