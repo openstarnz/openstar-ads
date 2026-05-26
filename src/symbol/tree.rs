@@ -237,13 +237,11 @@ impl<'de> Deserializer<'de> for &SymbolTree {
             SymbolTree::String(v) => visitor.visit_string(v.clone()),
             SymbolTree::Real80(v) => visitor.visit_f64(*v),
             SymbolTree::Bool(v) => visitor.visit_bool(*v),
-            SymbolTree::Unknown => visitor.visit_unit(),
-            SymbolTree::Void(_items) => Err(Error::Deserialisation(
-                "unable to deserialize SymbolTree::Void".to_owned(),
+            SymbolTree::Missing => visitor.visit_none(),
+            SymbolTree::Unknown => Err(Error::Deserialisation(
+                "unable to deserialize SymbolTree::Unknown".to_owned(),
             )),
-            SymbolTree::Missing => Err(Error::Deserialisation(
-                "unable to deserialize SymbolTree::Missing".to_owned(),
-            )),
+            SymbolTree::Void(bytes) => visitor.visit_bytes(bytes),
             SymbolTree::Malformed => Err(Error::Deserialisation(
                 "unable to deserialize SymbolTree::Malformed".to_owned(),
             )),
@@ -280,7 +278,7 @@ impl<'de> Deserializer<'de> for &SymbolTree {
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Couldn't deserialise symbol tree with message: {0:?}")]
+    #[error("Couldn't deserialise symbol tree with message: {0}")]
     Deserialisation(String),
 }
 
@@ -316,7 +314,7 @@ impl<'a, 'de: 'a> MapAccess<'de> for MapAccessor<'a> {
     {
         self.items
             .get_index(self.key_index)
-            .map(|(key, _)| seed.deserialize(&SymbolTree::String(key.clone())))
+            .map(|(key, _)| seed.deserialize(KeyDeserializer(key)))
             .transpose()
     }
 
@@ -336,12 +334,12 @@ impl<'a, 'de: 'a> MapAccess<'de> for MapAccessor<'a> {
 }
 
 struct SeqAccessor<'a> {
-    items: &'a Vec<SymbolTree>,
+    items: &'a [SymbolTree],
     index: usize,
 }
 
 impl<'a> SeqAccessor<'a> {
-    fn new(items: &'a Vec<SymbolTree>) -> Self {
+    fn new(items: &'a [SymbolTree]) -> Self {
         Self { items, index: 0 }
     }
 }
@@ -360,5 +358,24 @@ impl<'a, 'de: 'a> SeqAccess<'de> for SeqAccessor<'a> {
                 seed.deserialize(item)
             })
             .transpose()
+    }
+}
+
+struct KeyDeserializer<'a>(&'a str);
+
+impl<'de, 'a> Deserializer<'de> for KeyDeserializer<'a> {
+    type Error = Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        visitor.visit_str(self.0)
+    }
+
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
     }
 }
