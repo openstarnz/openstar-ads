@@ -1,17 +1,24 @@
+use std::fmt::Display;
+
 use super::type_tree::SymbolTypeTree;
 use chrono::{DateTime, NaiveDate, Utc};
 use indexmap::IndexMap;
-use serde::Serialize;
+use serde::{
+    de::{MapAccess, SeqAccess},
+    forward_to_deserialize_any, Deserializer, Serialize,
+};
+use thiserror::Error;
 use tracing::warn;
 use zerocopy::FromBytes;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+/// A tree representation of ADS symbol data. Has the ability to be deserialised indirectly into types with serde
 pub enum SymbolTree {
     Missing,
     Malformed,
     Struct(IndexMap<String, SymbolTree>),
-    // Not fully implemented.
+    /// Not fully implemented.
     Array(Vec<SymbolTree>),
     Void(Vec<u8>),
     Int(i16),
@@ -205,5 +212,171 @@ impl SymbolTree {
         } else {
             None
         }
+    }
+}
+
+impl<'de> Deserializer<'de> for &SymbolTree {
+    type Error = Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        match self {
+            SymbolTree::Struct(index_map) => visitor.visit_map(MapAccessor::new(index_map)),
+            SymbolTree::Array(symbol_trees) => visitor.visit_seq(SeqAccessor::new(symbol_trees)),
+            SymbolTree::Int(v) => visitor.visit_i16(*v),
+            SymbolTree::Dint(v) => visitor.visit_i32(*v),
+            SymbolTree::Real(v) => visitor.visit_f32(*v),
+            SymbolTree::Lreal(v) => visitor.visit_f64(*v),
+            SymbolTree::Sint(v) => visitor.visit_i8(*v),
+            SymbolTree::Usint(v) => visitor.visit_u8(*v),
+            SymbolTree::Uint(v) => visitor.visit_u16(*v),
+            SymbolTree::Udint(v) => visitor.visit_u32(*v),
+            SymbolTree::Lint(v) => visitor.visit_i64(*v),
+            SymbolTree::Ulint(v) => visitor.visit_u64(*v),
+            SymbolTree::String(v) => visitor.visit_string(v.clone()),
+            SymbolTree::Real80(v) => visitor.visit_f64(*v),
+            SymbolTree::Bool(v) => visitor.visit_bool(*v),
+            SymbolTree::Missing => visitor.visit_none(),
+            SymbolTree::Unknown => Err(Error::Deserialisation(
+                "unable to deserialize SymbolTree::Unknown".to_owned(),
+            )),
+            SymbolTree::Void(bytes) => visitor.visit_bytes(bytes),
+            SymbolTree::Malformed => Err(Error::Deserialisation(
+                "unable to deserialize SymbolTree::Malformed".to_owned(),
+            )),
+        }
+    }
+
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        match self {
+            SymbolTree::Missing => visitor.visit_none(),
+            t => visitor.visit_some(t),
+        }
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        visitor.visit_newtype_struct(self)
+    }
+
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf unit unit_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Couldn't deserialise symbol tree with message: {0}")]
+    Deserialisation(String),
+}
+
+impl serde::de::Error for Error {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        Self::Deserialisation(msg.to_string())
+    }
+}
+
+struct MapAccessor<'a> {
+    items: &'a IndexMap<String, SymbolTree>,
+    key_index: usize,
+}
+
+impl<'a> MapAccessor<'a> {
+    pub fn new(items: &'a IndexMap<String, SymbolTree>) -> Self {
+        Self {
+            items,
+            key_index: 0,
+        }
+    }
+}
+
+impl<'a, 'de: 'a> MapAccess<'de> for MapAccessor<'a> {
+    type Error = Error;
+
+    fn next_key_seed<K>(&mut self, seed: K) -> Result<Option<K::Value>, Self::Error>
+    where
+        K: serde::de::DeserializeSeed<'de>,
+    {
+        self.items
+            .get_index(self.key_index)
+            .map(|(key, _)| seed.deserialize(KeyDeserializer(key)))
+            .transpose()
+    }
+
+    fn next_value_seed<V>(&mut self, seed: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::DeserializeSeed<'de>,
+    {
+        if let Some((_, value)) = self.items.get_index(self.key_index) {
+            // Increment the key index only after the value has been retrieved
+            self.key_index += 1;
+            return seed.deserialize(value);
+        }
+        Err(Error::Deserialisation(
+            "failed to get next value from map".to_owned(),
+        ))
+    }
+}
+
+struct SeqAccessor<'a> {
+    items: &'a [SymbolTree],
+    index: usize,
+}
+
+impl<'a> SeqAccessor<'a> {
+    fn new(items: &'a [SymbolTree]) -> Self {
+        Self { items, index: 0 }
+    }
+}
+
+impl<'a, 'de: 'a> SeqAccess<'de> for SeqAccessor<'a> {
+    type Error = Error;
+
+    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
+    where
+        T: serde::de::DeserializeSeed<'de>,
+    {
+        self.items
+            .get(self.index)
+            .map(|item| {
+                self.index += 1;
+                seed.deserialize(item)
+            })
+            .transpose()
+    }
+}
+
+struct KeyDeserializer<'a>(&'a str);
+
+impl<'de, 'a> Deserializer<'de> for KeyDeserializer<'a> {
+    type Error = Error;
+
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, Self::Error>
+    where
+        V: serde::de::Visitor<'de>,
+    {
+        visitor.visit_str(self.0)
+    }
+
+    forward_to_deserialize_any! {
+        bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+        bytes byte_buf option unit unit_struct newtype_struct seq tuple
+        tuple_struct map struct enum identifier ignored_any
     }
 }
