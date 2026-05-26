@@ -13,11 +13,12 @@ use zerocopy::FromBytes;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+/// A tree representation of ADS symbol data. Has the ability to be deserialised indirectly into types with serde
 pub enum SymbolTree {
     Missing,
     Malformed,
     Struct(IndexMap<String, SymbolTree>),
-    // Not fully implemented.
+    /// Not fully implemented.
     Array(Vec<SymbolTree>),
     Void(Vec<u8>),
     Int(i16),

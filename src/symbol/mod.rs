@@ -13,7 +13,7 @@ pub use self::type_tree::*;
 #[cfg(test)]
 mod tests {
     use chrono::{DateTime, Datelike, Timelike, Utc};
-    use indexmap::IndexMap;
+    use indexmap::{indexmap, IndexMap};
     use serde::Deserialize;
 
     use crate::symbol::{
@@ -301,5 +301,63 @@ mod tests {
         let tree = SymbolTree::Array(vec![SymbolTree::Uint(1), SymbolTree::Uint(2)]);
         let v: Vec<u16> = Vec::deserialize(&tree).unwrap();
         assert_eq!(v, vec![1, 2]);
+    }
+
+    #[test]
+    // The intent here is that deserializing should be as optimistic as possible i.e we don't care if there is extra data
+    // even if the data is malformed
+    fn deserialize_struct_with_extra_fields() {
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct TwoFields {
+            a: u16,
+            b: u16,
+        }
+
+        let mut map = IndexMap::new();
+        map.insert("a".into(), SymbolTree::Uint(1));
+        map.insert("b".into(), SymbolTree::Uint(2));
+        map.insert("c".into(), SymbolTree::Missing);
+        let tree = SymbolTree::Struct(map);
+
+        let result = TwoFields::deserialize(&tree).unwrap();
+        assert_eq!(result, TwoFields { a: 1, b: 2 });
+    }
+
+    #[test]
+    fn deserialize_nested_struct() {
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct FirstLayer {
+            a: SecondLayer,
+            b: SecondLayer,
+        }
+
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct SecondLayer {
+            a: u8,
+            b: u8,
+        }
+        let sla_map = indexmap! {
+            "a".to_string() => SymbolTree::Usint(1),
+            "b".to_string() => SymbolTree::Usint(2)
+        };
+
+        let slb_map = indexmap! {
+            "a".to_string() => SymbolTree::Usint(3),
+            "b".to_string() => SymbolTree::Usint(4)
+        };
+
+        let first_layer = SymbolTree::Struct(indexmap! {
+            "a".to_string() => SymbolTree::Struct(sla_map),
+            "b".to_string() => SymbolTree::Struct(slb_map)
+        });
+
+        let result = FirstLayer::deserialize(&first_layer).unwrap();
+        assert_eq!(
+            result,
+            FirstLayer {
+                a: SecondLayer { a: 1, b: 2 },
+                b: SecondLayer { a: 3, b: 4 }
+            }
+        );
     }
 }
