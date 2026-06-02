@@ -1,9 +1,10 @@
 //! # openstar-ads
 //!
-//! An ADS client to interact with Beckhoff PLCs, as needed by [OpenStar].
+//! An async ADS client to interact with Beckhoff PLCs, as needed by [OpenStar].
 //!
 //! Features:
 //!
+//! - Asynchronous, non-blocking, integrated with [`tokio`][tokio]
 //! - Easy connections (with or without ADS router)
 //! - Read symbol values
 //! - Subscribe to symbol values
@@ -12,7 +13,11 @@
 //! - Subscribe to a symbol tree using the dynamic type tree
 //! - Subscribe to a flattened map of data for dynamic type tree
 //!
+//! Based on the [`ads`][ads] crate.
+//!
 //! [OpenStar]: https://openstar.tech
+//! [tokio]: https://tokio.rs/
+//! [ads]: https://github.com/birkenfeld/ads-rs
 //!
 //! ## Installation
 //!
