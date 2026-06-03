@@ -1,9 +1,10 @@
 # openstar-ads
 
-An ADS client to interact with Beckhoff PLCs, as needed by [OpenStar].
+An async ADS client to interact with Beckhoff PLCs, as needed by [OpenStar].
 
 Features:
 
+- Asynchronous, non-blocking, integrated with [`tokio`][tokio]
 - Easy connections (with or without ADS router)
 - Read symbol values
 - Subscribe to symbol values
@@ -12,7 +13,11 @@ Features:
 - Subscribe to a symbol tree using the dynamic type tree
 - Subscribe to a flattened map of data for dynamic type tree
 
+Based on the [`ads`][ads] crate.
+
 [OpenStar]: https://openstar.tech
+[tokio]: https://tokio.rs/
+[ads]: https://github.com/birkenfeld/ads-rs
 
 ## Installation
 
@@ -71,3 +76,18 @@ fn env_var(key: &str) -> anyhow::Result<String> {
         .with_context(|| format!("Environment variable {key} not found."))
 }
 ```
+
+## License
+
+<sup>
+Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
+2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
+</sup>
+
+<br>
+
+<sub>
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in `openstar-ads` by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
+</sub>
