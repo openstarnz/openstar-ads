@@ -16,7 +16,7 @@ use crate::{
         get_symbol_info, SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt,
         SymbolTypeTree,
     },
-    AdsConnection, AdsParams, AdsState, AmsAddr, Error, Result, Timeouts,
+    AdsConnection, AdsParams, AmsAddr, Result, Timeouts,
 };
 
 /// A builder for help create [`Ads`].
@@ -183,43 +183,6 @@ impl Ads {
     pub async fn get_info(&self) -> Result<DeviceInfo> {
         self.with_client("get_info", async move |client| {
             client.read_device_info().await
-        })
-        .await
-    }
-
-    /// Returns if the connected ADS device is in run mode.
-    pub async fn is_run_mode(&self) -> Result<bool> {
-        self.with_client("is_run_mode", async move |client| {
-            let state_info = client.read_state().await?;
-            Ok(state_info.ads_state == AdsState::Run)
-        })
-        .await
-    }
-
-    /// Attempts to set the ADS device into run mode if it is not already in it.
-    pub async fn set_to_run_mode(&self) -> Result<()> {
-        self.with_client("set_to_run_mode", async move |client| {
-            let device_info = client.read_device_info().await?;
-            info!("Device Info: {:?}", device_info);
-
-            let state_info = client.read_state().await?;
-            info!("Device State: {:?}", state_info);
-
-            if state_info.ads_state != AdsState::Run {
-                info!("Attempting to set PLC to run mode...");
-
-                client
-                    .write_control(AdsState::Run, state_info.device_state)
-                    .await?;
-
-                let state_info = client.read_state().await?;
-                info!("Device State: {:?}", state_info);
-                if state_info.ads_state != AdsState::Run {
-                    return Err(Error::Other("failed to set PLC to run mode!".to_owned()));
-                }
-            }
-
-            Ok(())
         })
         .await
     }
@@ -444,42 +407,16 @@ impl Ads {
         Ok(subscription)
     }
 
-    fn should_disconnect(error: &Error) -> bool {
-        matches!(
-            error,
-            Error::Io(_, _) | Error::Ads(_, _, 0x006) | Error::Reply(_, "unexpected invoke ID", _)
-        )
-    }
-
-    async fn with_client<Callback, Output>(&self, name: &str, callback: Callback) -> Result<Output>
+    pub async fn with_client<Callback, Output>(
+        &self,
+        name: &str,
+        callback: Callback,
+    ) -> Result<Output>
     where
         Callback: AsyncFn(Arc<core::Client>) -> Result<Output> + Send + Sync + 'static,
     {
-        let client = {
-            let connection = self.connection.lock().await;
-            let Some(client) = connection.client() else {
-                return Err(Error::Disconnected);
-            };
-            client
-        };
-
-        let result = callback(client).await;
-
-        match result {
-            Ok(value) => Ok(value),
-            Err(error) => {
-                error!("{name} error: {error}");
-
-                if Self::should_disconnect(&error) {
-                    warn!("PLC client error indicates we should disconnect...");
-
-                    // Ignore disconnect error
-                    let _ = self.disconnect().await;
-                }
-
-                Err(error)
-            }
-        }
+        let mut connection = self.connection.lock().await;
+        connection.with_client(name, callback).await
     }
 }
 

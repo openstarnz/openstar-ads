@@ -28,9 +28,9 @@ impl AdsConnection {
             AdsConnection::Disconnected => {
                 let client = core::Client::new(router, target, source, timeouts).await?;
 
-                if !is_run_mode(client).await? {
+                if !self.is_run_mode().await? {
                     if should_set_to_run_mode {
-                        set_to_run_mode(client.clone()).await?;
+                        self.set_to_run_mode().await?;
                     } else {
                         self.disconnect().await;
                         return Err(Error::Other("PLC not in run mode".to_owned()));
@@ -59,45 +59,20 @@ impl AdsConnection {
         }
     }
 
-    pub fn client(&self) -> Option<Arc<core::Client>> {
-        match self {
-            AdsConnection::Connected(client) => Some(client.clone()),
-            AdsConnection::Disconnected => None,
-        }
-    }
-
     pub async fn with_client<Callback, Output>(
-        &self,
+        &mut self,
         name: &str,
         callback: Callback,
     ) -> Result<Output>
     where
         Callback: AsyncFn(Arc<core::Client>) -> Result<Output> + Send + Sync + 'static,
     {
-        let client = {
-            let Some(client) = self.client() else {
-                return Err(Error::Disconnected);
-            };
-            client
-        };
+        let client = match self {
+            AdsConnection::Connected(client) => Ok(client.clone()),
+            AdsConnection::Disconnected => Err(Error::Disconnected),
+        }?;
 
         let result = callback(client).await;
-
-        self.maybe_disconnect(result, name).await
-    }
-
-    fn should_disconnect(error: &Error) -> bool {
-        matches!(
-            error,
-            Error::Io(_, _) | Error::Ads(_, _, 0x006) | Error::Reply(_, "unexpected invoke ID", _)
-        )
-    }
-
-    async fn maybe_disconnect<Output>(
-        &mut self,
-        result: Result<Output>,
-        name: &str,
-    ) -> Result<Output> {
         match result {
             Ok(value) => Ok(value),
             Err(error) => {
@@ -114,35 +89,48 @@ impl AdsConnection {
             }
         }
     }
-}
 
-// Returns if the connected ADS device is in run mode.
-async fn is_run_mode(client: Arc<core::Client>) -> Result<bool> {
-    let state_info = client.read_state().await?;
-    Ok(state_info.ads_state == AdsState::Run)
-}
-
-/// Attempts to set the ADS device into run mode if it is not already in it.
-async fn set_to_run_mode(client: Arc<core::Client>) -> Result<()> {
-    let device_info = client.read_device_info().await?;
-    info!("Device Info: {:?}", device_info);
-
-    let state_info = client.read_state().await?;
-    info!("Device State: {:?}", state_info);
-
-    if state_info.ads_state != AdsState::Run {
-        info!("Attempting to set PLC to run mode...");
-
-        client
-            .write_control(AdsState::Run, state_info.device_state)
-            .await?;
-
-        let state_info = client.read_state().await?;
-        info!("Device State: {:?}", state_info);
-        if state_info.ads_state != AdsState::Run {
-            return Err(Error::Other("failed to set PLC to run mode!".to_owned()));
-        }
+    /// Returns if the connected ADS device is in run mode.
+    pub async fn is_run_mode(&mut self) -> Result<bool> {
+        self.with_client("is_run_mode", async move |client| {
+            let state_info = client.read_state().await?;
+            Ok(state_info.ads_state == AdsState::Run)
+        })
+        .await
     }
 
-    Ok(())
+    /// Attempts to set the ADS device into run mode if it is not already in it.
+    pub async fn set_to_run_mode(&mut self) -> Result<()> {
+        self.with_client("set_to_run_mode", async move |client| {
+            let device_info = client.read_device_info().await?;
+            info!("Device Info: {:?}", device_info);
+
+            let state_info = client.read_state().await?;
+            info!("Device State: {:?}", state_info);
+
+            if state_info.ads_state != AdsState::Run {
+                info!("Attempting to set PLC to run mode...");
+
+                client
+                    .write_control(AdsState::Run, state_info.device_state)
+                    .await?;
+
+                let state_info = client.read_state().await?;
+                info!("Device State: {:?}", state_info);
+                if state_info.ads_state != AdsState::Run {
+                    return Err(Error::Other("failed to set PLC to run mode!".to_owned()));
+                }
+            }
+
+            Ok(())
+        })
+        .await
+    }
+
+    fn should_disconnect(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::Io(_, _) | Error::Ads(_, _, 0x006) | Error::Reply(_, "unexpected invoke ID", _)
+        )
+    }
 }
