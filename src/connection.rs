@@ -28,7 +28,6 @@ impl AdsConnection {
             AdsConnection::Disconnected => {
                 let client = core::Client::new(router, target, source, timeouts).await?;
 
-                // Only store the client once the PLC has answered and is in run mode.
                 if let Err(error) = Self::ensure_run_mode(&client, set_to_run_mode).await {
                     client.close().await;
                     return Err(error);
