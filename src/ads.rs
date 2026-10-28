@@ -173,10 +173,7 @@ impl Ads {
     /// Check whether the ADS client is connected.
     pub async fn is_connected(&self) -> bool {
         let connection = self.connection.lock().await;
-        match *connection {
-            AdsConnection::Connected(_) => true,
-            AdsConnection::Disconnected => false,
-        }
+        connection.is_connected()
     }
 
     /// Get info from the ADS device.
