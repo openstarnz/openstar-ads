@@ -130,17 +130,9 @@ impl Ads {
                     self.target,
                     self.source,
                     self.timeouts,
+                    self.set_to_run_mode,
                 )
                 .await?;
-        }
-
-        if !self.is_run_mode().await? {
-            if self.set_to_run_mode {
-                self.set_to_run_mode().await?;
-            } else {
-                self.disconnect().await;
-                return Err(Error::Other("PLC not in run mode".to_owned()));
-            }
         }
 
         Ok(())
