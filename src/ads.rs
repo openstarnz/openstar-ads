@@ -16,7 +16,7 @@ use crate::{
         get_symbol_info, SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt,
         SymbolTypeTree,
     },
-    AdsConnection, AdsParams, AmsAddr, Result, Timeouts,
+    AdsConnection, AdsParams, AmsAddr, Error, Result, Timeouts,
 };
 
 /// A builder for help create [`Ads`].
@@ -173,13 +173,32 @@ impl Ads {
     /// Check whether the ADS client is connected.
     pub async fn is_connected(&self) -> bool {
         let connection = self.connection.lock().await;
-        connection.is_connected()
+        match *connection {
+            AdsConnection::Connected(_) => true,
+            AdsConnection::Disconnected => false,
+        }
     }
 
     /// Get info from the ADS device.
     pub async fn get_info(&self) -> Result<DeviceInfo> {
         self.with_client("get_info", async move |client| {
             client.read_device_info().await
+        })
+        .await
+    }
+
+    /// Returns if the connected ADS device is in run mode.
+    pub async fn is_run_mode(&self) -> Result<bool> {
+        self.with_client("is_run_mode", async move |client| {
+            AdsConnection::is_run_mode(&client).await
+        })
+        .await
+    }
+
+    /// Attempts to set the ADS device into run mode if it is not already in it.
+    pub async fn set_to_run_mode(&self) -> Result<()> {
+        self.with_client("set_to_run_mode", async move |client| {
+            AdsConnection::set_to_run_mode(&client).await
         })
         .await
     }
@@ -404,16 +423,42 @@ impl Ads {
         Ok(subscription)
     }
 
-    pub async fn with_client<Callback, Output>(
-        &self,
-        name: &str,
-        callback: Callback,
-    ) -> Result<Output>
+    fn should_disconnect(error: &Error) -> bool {
+        matches!(
+            error,
+            Error::Io(_, _) | Error::Ads(_, _, 0x006) | Error::Reply(_, "unexpected invoke ID", _)
+        )
+    }
+
+    async fn with_client<Callback, Output>(&self, name: &str, callback: Callback) -> Result<Output>
     where
         Callback: AsyncFn(Arc<core::Client>) -> Result<Output> + Send + Sync + 'static,
     {
-        let mut connection = self.connection.lock().await;
-        connection.with_client(name, callback).await
+        let client = {
+            let connection = self.connection.lock().await;
+            let Some(client) = connection.client() else {
+                return Err(Error::Disconnected);
+            };
+            client
+        };
+
+        let result = callback(client).await;
+
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                error!("{name} error: {error}");
+
+                if Self::should_disconnect(&error) {
+                    warn!("PLC client error indicates we should disconnect...");
+
+                    // Ignore disconnect error
+                    let _ = self.disconnect().await;
+                }
+
+                Err(error)
+            }
+        }
     }
 }
 
