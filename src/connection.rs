@@ -73,9 +73,6 @@ impl AdsConnection {
     where
         Callback: AsyncFn(Arc<core::Client>) -> Result<Output> + Send + Sync + 'static,
     {
-        if !self.is_connected {
-            return Err(Error::Disconnected);
-        }
         let Some(ref client) = self.client else {
             return Err(Error::Disconnected);
         };
