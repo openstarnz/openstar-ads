@@ -16,7 +16,7 @@ use crate::{
         get_symbol_info, SymbolMap, SymbolMapExt, SymbolTree, SymbolTypeMap, SymbolTypeMapExt,
         SymbolTypeTree,
     },
-    AdsConnection, AdsParams, AdsState, AmsAddr, Error, Result, Timeouts,
+    AdsConnection, AdsParams, AmsAddr, Error, Result, Timeouts,
 };
 
 /// A builder for help create [`Ads`].
@@ -130,17 +130,9 @@ impl Ads {
                     self.target,
                     self.source,
                     self.timeouts,
+                    self.set_to_run_mode,
                 )
                 .await?;
-        }
-
-        if !self.is_run_mode().await? {
-            if self.set_to_run_mode {
-                self.set_to_run_mode().await?;
-            } else {
-                self.disconnect().await;
-                return Err(Error::Other("PLC not in run mode".to_owned()));
-            }
         }
 
         Ok(())
@@ -198,8 +190,7 @@ impl Ads {
     /// Returns if the connected ADS device is in run mode.
     pub async fn is_run_mode(&self) -> Result<bool> {
         self.with_client("is_run_mode", async move |client| {
-            let state_info = client.read_state().await?;
-            Ok(state_info.ads_state == AdsState::Run)
+            AdsConnection::is_run_mode(&client).await
         })
         .await
     }
@@ -207,27 +198,7 @@ impl Ads {
     /// Attempts to set the ADS device into run mode if it is not already in it.
     pub async fn set_to_run_mode(&self) -> Result<()> {
         self.with_client("set_to_run_mode", async move |client| {
-            let device_info = client.read_device_info().await?;
-            info!("Device Info: {:?}", device_info);
-
-            let state_info = client.read_state().await?;
-            info!("Device State: {:?}", state_info);
-
-            if state_info.ads_state != AdsState::Run {
-                info!("Attempting to set PLC to run mode...");
-
-                client
-                    .write_control(AdsState::Run, state_info.device_state)
-                    .await?;
-
-                let state_info = client.read_state().await?;
-                info!("Device State: {:?}", state_info);
-                if state_info.ads_state != AdsState::Run {
-                    return Err(Error::Other("failed to set PLC to run mode!".to_owned()));
-                }
-            }
-
-            Ok(())
+            AdsConnection::set_to_run_mode(&client).await
         })
         .await
     }
