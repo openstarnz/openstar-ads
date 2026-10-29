@@ -37,7 +37,10 @@ async fn connect_to_silent_router_fails_without_ever_reporting_connected() {
         () = poll_until_connected => panic!("is_connected() returned true before the PLC answered"),
     };
 
-    assert!(result.is_err(), "connect should fail when the PLC never answers");
+    assert!(
+        result.is_err(),
+        "connect should fail when the PLC never answers"
+    );
     assert!(!ads.is_connected().await);
 
     // The client must be closed on failure, not left open.
