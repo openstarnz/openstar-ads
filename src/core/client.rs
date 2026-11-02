@@ -438,10 +438,6 @@ impl Client {
         payload_bufs: &[&[u8]],
         result_bufs: &mut [&mut [u8]],
     ) -> Result<usize> {
-        if self.is_closed() {
-            return Err(Error::Disconnected);
-        }
-
         // Increase the invoke ID.  We could also generate a random u32, but
         // this way the sequence of packets can be tracked.
         let dispatched_invoke_id = self.invoke_id.fetch_add(1, Ordering::Relaxed);
@@ -480,8 +476,7 @@ impl Client {
 
         // Registered until this future completes or is dropped, so a reply
         // can never find a request that is no longer waiting.
-        let _pending =
-            PendingRequest::register(&self.shared.commands, dispatched_invoke_id, resp_tx);
+        let _pending = self.shared.register(dispatched_invoke_id, resp_tx)?;
 
         let written = {
             let mut writer: MutexGuard<OwnedWriteHalf> = self.socket_writer.lock().await;
@@ -644,10 +639,7 @@ impl Client {
         .await?;
 
         let (sender, receiver) = mpsc::channel(32);
-        {
-            let mut subscribers = self.shared.subscribers.lock().unwrap();
-            subscribers.insert(handle.get(), sender);
-        }
+        self.shared.subscribe(handle.get(), sender)?;
 
         Ok((receiver, handle.get()))
     }
@@ -728,9 +720,45 @@ impl Shared {
         self.closed.borrow().is_some()
     }
 
+    /// Register a request waiting for the reply to `invoke_id`. Fails at
+    /// once if the connection has ended.
+    fn register(&self, invoke_id: u32, reply: PendingReply) -> Result<PendingRequest<'_>> {
+        {
+            let mut commands = self.commands.lock().unwrap();
+            // Checked under the lock: see the ordering note on `tear_down`.
+            if self.is_closed() {
+                return Err(Error::Disconnected);
+            }
+            commands.insert(invoke_id, reply);
+        }
+        Ok(PendingRequest {
+            commands: &self.commands,
+            invoke_id,
+        })
+    }
+
+    /// Register the sender for notifications on `handle`. Fails at once if
+    /// the connection has ended, dropping the sender so the receiver closes.
+    fn subscribe(&self, handle: NotificationHandle, sender: mpsc::Sender<Bytes>) -> Result<()> {
+        {
+            let mut subscribers = self.subscribers.lock().unwrap();
+            // Checked under the lock: see the ordering note on `tear_down`.
+            if self.is_closed() {
+                return Err(Error::Disconnected);
+            }
+            subscribers.insert(handle, sender);
+        }
+        Ok(())
+    }
+
     /// End the connection: every waiting request fails with `reason`, every
     /// notification subscription closes, and later requests fail at once.
     /// Idempotent: only the first call does anything.
+    ///
+    /// Ordering: `closed` is set before either map is locked and emptied.
+    /// `register` and `subscribe` check `closed` while holding the map's
+    /// lock, so an entry is either refused, or added before the map is
+    /// emptied and so swept up by it. Nothing can slip in after.
     fn tear_down(&self, reason: Error) {
         let first = self.closed.send_if_modified(|closed| {
             if closed.is_some() {
@@ -767,19 +795,6 @@ impl Shared {
 struct PendingRequest<'a> {
     commands: &'a PendingCommands,
     invoke_id: u32,
-}
-
-impl<'a> PendingRequest<'a> {
-    fn register(commands: &'a PendingCommands, invoke_id: u32, reply: PendingReply) -> Self {
-        {
-            let mut commands = commands.lock().unwrap();
-            commands.insert(invoke_id, reply);
-        }
-        Self {
-            commands,
-            invoke_id,
-        }
-    }
 }
 
 impl Drop for PendingRequest<'_> {
