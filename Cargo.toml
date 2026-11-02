@@ -33,3 +33,4 @@ zerocopy = { version = "0.8.48", features = ["derive"] }
 
 [dev-dependencies]
 anyhow = "1"
+socket2 = "0.6"

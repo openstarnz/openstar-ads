@@ -245,6 +245,7 @@ dependencies = [
  "indexmap",
  "itertools",
  "serde",
+ "socket2",
  "thiserror",
  "tokio",
  "tracing",
