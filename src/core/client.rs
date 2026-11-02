@@ -481,8 +481,6 @@ impl Client {
 
         let (resp_tx, resp_rx) = oneshot::channel::<Result<(AdsHeader, Bytes)>>();
 
-        // Registered until this future completes or is dropped, so a reply
-        // can never find a request that is no longer waiting.
         let _pending = self.shared.register(dispatched_invoke_id, resp_tx)?;
 
         let written = {
@@ -498,7 +496,6 @@ impl Client {
             }
         };
         if let Err(error) = written {
-            // The socket will not take our data, so nothing can come back.
             self.shared.tear_down(error.clone());
             return Err(error);
         }
@@ -702,7 +699,6 @@ impl Client {
             let _ = socket.shutdown().await;
         }
 
-        // Stop the receiver task.
         {
             let mut receiver = self.receiver.lock().await;
             receiver.stop().await;
@@ -735,12 +731,10 @@ impl Shared {
         self.closed.borrow().is_some()
     }
 
-    /// Register a request waiting for the reply to `invoke_id`. Fails at
-    /// once if the connection has ended.
+    /// Fails if the connection has ended.
     fn register(&self, invoke_id: u32, reply: PendingReply) -> Result<PendingRequest<'_>> {
         {
             let mut commands = self.commands.lock().unwrap();
-            // Checked under the lock: see the ordering note on `tear_down`.
             if self.is_closed() {
                 return Err(Error::Disconnected);
             }
@@ -752,12 +746,10 @@ impl Shared {
         })
     }
 
-    /// Register the sender for notifications on `handle`. Fails at once if
-    /// the connection has ended, dropping the sender so the receiver closes.
+    /// Fails if the connection has ended.
     fn subscribe(&self, handle: NotificationHandle, sender: mpsc::Sender<Bytes>) -> Result<()> {
         {
             let mut subscribers = self.subscribers.lock().unwrap();
-            // Checked under the lock: see the ordering note on `tear_down`.
             if self.is_closed() {
                 return Err(Error::Disconnected);
             }
@@ -766,14 +758,11 @@ impl Shared {
         Ok(())
     }
 
-    /// End the connection: every waiting request fails with `reason`, every
-    /// notification subscription closes, and later requests fail at once.
-    /// Idempotent: only the first call does anything.
+    /// End the connection. Idempotent.
     ///
-    /// Ordering: `closed` is set before either map is locked and emptied.
-    /// `register` and `subscribe` check `closed` while holding the map's
-    /// lock, so an entry is either refused, or added before the map is
-    /// emptied and so swept up by it. Nothing can slip in after.
+    /// `closed` is set before either map is emptied, and `register` and
+    /// `subscribe` check it under the map's lock, so nothing can be added
+    /// after the map is emptied.
     fn tear_down(&self, reason: Error) {
         let first = self.closed.send_if_modified(|closed| {
             if closed.is_some() {
@@ -796,7 +785,6 @@ impl Shared {
             let _ = reply.send(Err(reason.clone()));
         }
 
-        // Dropping the senders ends every `NotificationSubscription`.
         {
             let mut subscribers = self.subscribers.lock().unwrap();
             subscribers.clear();
@@ -804,9 +792,7 @@ impl Shared {
     }
 }
 
-/// A request's slot in the pending map, held while the request is alive.
-/// Dropping it (reply received, timed out, or the future cancelled)
-/// takes the entry back out.
+/// Removes the request from the pending map when dropped.
 struct PendingRequest<'a> {
     commands: &'a PendingCommands,
     invoke_id: u32,
@@ -856,7 +842,6 @@ impl ClientReceiver {
         let _handle = self.handle.insert(rx_worker);
     }
 
-    /// Stops the reader without waiting on the socket or the peer.
     pub async fn stop(&mut self) {
         if let Some(handle) = self.handle.take() {
             handle.abort();
@@ -866,7 +851,6 @@ impl ClientReceiver {
 }
 
 impl Drop for ClientReceiver {
-    /// A client dropped without `close` must not leave its reader behind.
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
             handle.abort();
@@ -966,8 +950,6 @@ impl ClientReceiver {
                     }
 
                     None => {
-                        // Nobody is waiting for this reply,
-                        // request timed out or was cancelled.
                         warn!("Ignoring late ADS reply with invoke ID {invoke_id}");
                     }
                 };
@@ -993,7 +975,6 @@ impl ClientReceiver {
                             let Some(subscriber) = subscribers.get(&sample.handle) else {
                                 continue;
                             };
-                            // Never wait on a slow subscriber
                             match subscriber.try_send(Bytes::copy_from_slice(sample.data)) {
                                 Ok(()) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {

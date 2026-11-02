@@ -1,9 +1,4 @@
 //! A scriptable fake PLC that speaks just enough ADS over TCP for the tests.
-//!
-//! It answers symbol-handle lookups, reads, add/delete notification and read
-//! state, and the test drives the awkward cases: replies held back and
-//! released later, notifications sent on demand, the socket closed, or the
-//! socket kept open after the client has shut its side down.
 
 #![allow(dead_code)]
 
@@ -129,8 +124,7 @@ impl Session {
             control_rx,
             requests: requests.clone(),
             request_seen: request_seen.clone(),
-            // Handles differ per session so a stale handle from an earlier
-            // connection is rejected rather than quietly accepted.
+            // Per-session handles, so a stale handle from an earlier connection is rejected.
             next_symbol_handle: number * 1000,
             next_notification_handle: number * 1000,
             notification_handles: Vec::new(),
@@ -255,8 +249,6 @@ impl Worker {
                         self.keep_open_after_client_shutdown = true
                     }
                     Some(Control::SendMalformedFrame) => {
-                        // An AMS/TCP header whose reserved word is not one the
-                        // client knows, followed by an empty AMS header.
                         let mut packet = 0xFFFFu16.to_le_bytes().to_vec();
                         packet.extend_from_slice(&(AMS_HEADER as u32).to_le_bytes());
                         packet.resize(AMS_TCP_HEADER + AMS_HEADER, 0);

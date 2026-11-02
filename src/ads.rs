@@ -125,7 +125,6 @@ impl Ads {
         {
             let mut connection = self.connection.lock().await;
 
-            // If a new connection, start with fresh symbol handles.
             if !connection.is_connected() {
                 let mut symbol_handles = self.symbol_handles.lock().await;
                 symbol_handles.clear();
