@@ -222,7 +222,8 @@ impl Worker {
                     }
                     None => {
                         client_gone = true;
-                        if !self.keep_open_after_client_shutdown {
+                        let stopped_reading = !*self.reading.borrow();
+                        if !self.keep_open_after_client_shutdown && !stopped_reading {
                             return;
                         }
                     }
@@ -336,16 +337,24 @@ fn with_length(data: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Reads whole AMS frames from the socket until it closes.
+/// Reads whole AMS frames from the socket until it closes or reading is
+/// stopped, which drops the read half mid-frame so the socket fills up.
 async fn read_frames(
-    mut reader: OwnedReadHalf,
+    reader: OwnedReadHalf,
     frames: mpsc::UnboundedSender<Vec<u8>>,
     mut reading: watch::Receiver<bool>,
 ) {
+    tokio::select! {
+        _ = reading.wait_for(|reading| !*reading) => {}
+        _ = read_frames_until_closed(reader, frames) => {}
+    }
+}
+
+async fn read_frames_until_closed(
+    mut reader: OwnedReadHalf,
+    frames: mpsc::UnboundedSender<Vec<u8>>,
+) {
     loop {
-        if reading.wait_for(|reading| *reading).await.is_err() {
-            return;
-        }
         let mut tcp_header = [0u8; AMS_TCP_HEADER];
         if reader.read_exact(&mut tcp_header).await.is_err() {
             return;
