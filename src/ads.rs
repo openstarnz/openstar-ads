@@ -125,8 +125,7 @@ impl Ads {
         {
             let mut connection = self.connection.lock().await;
 
-            // Symbol handles belong to a connection, so a new one starts
-            // without them.
+            // If a new connection, start with fresh symbol handles.
             if !connection.is_connected() {
                 let mut symbol_handles = self.symbol_handles.lock().await;
                 symbol_handles.clear();
@@ -428,8 +427,7 @@ impl Ads {
         Ok(subscription)
     }
 
-    /// A failed request is not a dead connection, with one exception: the
-    /// PLC's ADS port is gone, so the client should reconnect once it is back.
+    /// If the PLC's ADS port is gone, the client should disconnect (and reconnect).
     fn should_disconnect(error: &Error) -> bool {
         matches!(error, Error::Ads(_, _, 0x006))
     }

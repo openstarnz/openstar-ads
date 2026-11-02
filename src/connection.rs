@@ -26,7 +26,6 @@ impl AdsConnection {
             return Ok(());
         }
 
-        // A client whose connection ended on its own is still held here.
         self.disconnect().await;
 
         let client = core::Client::new(router, target, source, timeouts).await?;
@@ -60,8 +59,7 @@ impl AdsConnection {
         }
     }
 
-    /// The client, if it is still connected. A client whose connection has
-    /// ended is as good as gone, even before `disconnect` clears it.
+    /// The client, if it is still connected.
     pub fn client(&self) -> Option<Arc<core::Client>> {
         match self {
             AdsConnection::Connected(client) if !client.is_closed() => Some(client.clone()),

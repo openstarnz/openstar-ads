@@ -79,63 +79,6 @@ type PendingCommands = std::sync::Mutex<BTreeMap<u32, PendingReply>>;
 /// Notification senders by handle.
 type NotificationSubscribers = std::sync::Mutex<BTreeMap<u32, mpsc::Sender<Bytes>>>;
 
-/// The shared state between a client and its reader task.
-#[derive(Debug)]
-struct Shared {
-    /// Active requests
-    commands: PendingCommands,
-    /// Subscriptions to notifications
-    subscribers: NotificationSubscribers,
-    /// Why the connection ended, once it has
-    closed: watch::Sender<Option<Error>>,
-}
-
-impl Shared {
-    fn new() -> Self {
-        Self {
-            commands: Default::default(),
-            subscribers: Default::default(),
-            closed: watch::Sender::new(None),
-        }
-    }
-
-    fn is_closed(&self) -> bool {
-        self.closed.borrow().is_some()
-    }
-
-    /// Ends the connection: every waiting request fails with `reason`, every
-    /// notification subscription closes, and later requests fail at once.
-    /// Idempotent: only the first call does anything.
-    fn tear_down(&self, reason: Error) {
-        let first = self.closed.send_if_modified(|closed| {
-            if closed.is_some() {
-                return false;
-            }
-            *closed = Some(reason.clone());
-            true
-        });
-        if !first {
-            return;
-        }
-
-        warn!("ADS connection closed: {reason}");
-
-        let pending = {
-            let mut commands = self.commands.lock().unwrap();
-            std::mem::take(&mut *commands)
-        };
-        for (_, reply) in pending {
-            let _ = reply.send(Err(reason.clone()));
-        }
-
-        // Dropping the senders ends every `NotificationSubscription`.
-        {
-            let mut subscribers = self.subscribers.lock().unwrap();
-            subscribers.clear();
-        }
-    }
-}
-
 /// Represents a connection to a ADS server.
 ///
 /// The client implements only [the core ADS commands](https://infosys.beckhoff.com/english.php?content=../content/1033/tc3_ads_intro/115848331.html&id=).
@@ -726,11 +669,9 @@ impl Client {
         Ok(())
     }
 
-    /// Closes the connection. Safe to call on an already closed client, and
-    /// it does not wait on the PLC: a dead peer cannot delay it.
+    /// Close the connection.
     pub async fn close(&self) {
-        // Delete all active notifications. On a closed client each of these
-        // fails at once, which is fine: the socket is going away anyway.
+        // Delete all active notifications.
         {
             let handles = {
                 let subscribers = self.shared.subscribers.lock().unwrap();
@@ -754,7 +695,7 @@ impl Client {
             let _ = socket.shutdown().await;
         }
 
-        // Stop the receiver task, then settle whatever it had not.
+        // Stop the receiver task.
         {
             let mut receiver = self.receiver.lock().await;
             receiver.stop().await;
@@ -763,9 +704,66 @@ impl Client {
     }
 }
 
-/// A request's place in the pending map, held for as long as the request is
-/// waiting for its reply. Dropping it (reply received, timed out, or the
-/// future cancelled) takes the entry back out.
+/// The shared state between a client and its reader task.
+#[derive(Debug)]
+struct Shared {
+    /// Active requests
+    commands: PendingCommands,
+    /// Subscriptions to notifications
+    subscribers: NotificationSubscribers,
+    /// Why the connection ended, once it has
+    closed: watch::Sender<Option<Error>>,
+}
+
+impl Shared {
+    fn new() -> Self {
+        Self {
+            commands: Default::default(),
+            subscribers: Default::default(),
+            closed: watch::Sender::new(None),
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.borrow().is_some()
+    }
+
+    /// End the connection: every waiting request fails with `reason`, every
+    /// notification subscription closes, and later requests fail at once.
+    /// Idempotent: only the first call does anything.
+    fn tear_down(&self, reason: Error) {
+        let first = self.closed.send_if_modified(|closed| {
+            if closed.is_some() {
+                return false;
+            }
+            *closed = Some(reason.clone());
+            true
+        });
+        if !first {
+            return;
+        }
+
+        warn!("ADS connection closed: {reason}");
+
+        let pending = {
+            let mut commands = self.commands.lock().unwrap();
+            std::mem::take(&mut *commands)
+        };
+        for (_, reply) in pending {
+            let _ = reply.send(Err(reason.clone()));
+        }
+
+        // Dropping the senders ends every `NotificationSubscription`.
+        {
+            let mut subscribers = self.subscribers.lock().unwrap();
+            subscribers.clear();
+        }
+    }
+}
+
+/// A request's slot in the pending map, held while the request is alive.
+/// Dropping it (reply received, timed out, or the future cancelled)
+/// takes the entry back out.
 struct PendingRequest<'a> {
     commands: &'a PendingCommands,
     invoke_id: u32,
@@ -819,8 +817,6 @@ impl ClientReceiver {
 
             shared.tear_down(reason);
 
-            // Tell the peer too, in case it was the protocol and not the
-            // socket that broke.
             if let Some(client) = client.upgrade() {
                 let mut writer = client.socket_writer.lock().await;
                 let _ = writer.shutdown().await;
@@ -855,9 +851,6 @@ impl ClientReceiver {
         source: AmsAddr,
         shared: &Shared,
     ) -> Result<()> {
-        // The reader never times out: a quiet socket is not a broken one.
-        // Each request has its own reply timeout in `communicate`, and the
-        // reader exits when the socket closes or the client is closed.
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
@@ -939,14 +932,12 @@ impl ClientReceiver {
                 };
                 match pending {
                     Some(tx) => {
-                        // A failed send means the request was dropped between
-                        // our lookup and now; it no longer wants the reply.
                         let _ = tx.send(Ok((ads_header, payload_buf.freeze())));
                     }
 
                     None => {
-                        // The request already gave up (timed out or was
-                        // cancelled), so nobody is waiting for this reply.
+                        // Nobody is waiting for this reply,
+                        // request timed out or was cancelled.
                         warn!("Ignoring late ADS reply with invoke ID {invoke_id}");
                     }
                 };
@@ -972,14 +963,11 @@ impl ClientReceiver {
                             let Some(subscriber) = subscribers.get(&sample.handle) else {
                                 continue;
                             };
-                            // Never wait on a subscriber: a slow one would
-                            // hold up every reply on the connection.
+                            // Never wait on a slow subscriber
                             match subscriber.try_send(Bytes::copy_from_slice(sample.data)) {
                                 Ok(()) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    // The receiver has fallen behind; this
-                                    // sample is stale by the time it catches
-                                    // up, so let it go.
+                                    // The receiver has fallen behind
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
                                     dropped_subscribers.push(sample.handle);
