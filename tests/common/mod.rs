@@ -106,6 +106,7 @@ enum Control {
     Notify(Vec<u8>),
     Close,
     KeepOpenAfterClientShutdown,
+    SendMalformedFrame,
 }
 
 /// One client connection to the fake PLC.
@@ -164,6 +165,11 @@ impl Session {
     /// Close the TCP connection.
     pub fn close(&self) {
         let _ = self.control.send(Control::Close);
+    }
+
+    /// Send a frame the client cannot make sense of, leaving the socket open.
+    pub fn send_malformed_frame(&self) {
+        let _ = self.control.send(Control::SendMalformedFrame);
     }
 
     /// Keep our side of the socket open after the client shuts down its
@@ -239,6 +245,16 @@ impl Worker {
                     }
                     Some(Control::KeepOpenAfterClientShutdown) => {
                         self.keep_open_after_client_shutdown = true
+                    }
+                    Some(Control::SendMalformedFrame) => {
+                        // An AMS/TCP header whose reserved word is not one the
+                        // client knows, followed by an empty AMS header.
+                        let mut packet = 0xFFFFu16.to_le_bytes().to_vec();
+                        packet.extend_from_slice(&(AMS_HEADER as u32).to_le_bytes());
+                        packet.resize(AMS_TCP_HEADER + AMS_HEADER, 0);
+                        if self.writer.write_all(&packet).await.is_err() {
+                            return;
+                        }
                     }
                     Some(Control::Close) | None => return,
                 },

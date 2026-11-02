@@ -150,3 +150,39 @@ async fn a_subscriber_that_stops_reading_does_not_stall_requests() {
     let value: AdsUdint = ads.read_symbol(SYMBOL).await.unwrap();
     assert_eq!(u32::from(value), SYMBOL_VALUE);
 }
+
+#[tokio::test]
+async fn a_reader_killed_by_a_bad_frame_closes_the_connection() {
+    let mut plc = FakePlc::start().await;
+    let ads = plc.ads_without_timeouts().await;
+    let (session, connected) = tokio::join!(plc.accept(), ads.connect());
+    connected.unwrap();
+    session.keep_open_after_client_shutdown();
+
+    let mut subscription = ads
+        .subscribe::<AdsUdint>(SYMBOL, NotificationTransmissionMode::ServerOnChange)
+        .await
+        .unwrap();
+
+    session.send_malformed_frame();
+
+    let closed = timeout(TIMEOUT, subscription.recv()).await;
+    assert!(
+        matches!(closed, Ok(None)),
+        "subscription should end when the reader dies, got {closed:?}"
+    );
+    assert!(!ads.is_connected().await);
+
+    let started = Instant::now();
+    let failed = ads.read_symbol::<AdsUdint>(SYMBOL).await;
+    assert!(matches!(failed, Err(Error::Disconnected)), "got {failed:?}");
+    assert!(started.elapsed() < TIMEOUT / 2);
+
+    timeout(TIMEOUT, ads.disconnect())
+        .await
+        .expect("disconnect should not wait on the peer");
+
+    let (_session, ()) = tokio::join!(plc.accept(), ads.connect_with_retry());
+    let value: AdsUdint = ads.read_symbol(SYMBOL).await.unwrap();
+    assert_eq!(u32::from(value), SYMBOL_VALUE);
+}
