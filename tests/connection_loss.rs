@@ -186,3 +186,29 @@ async fn a_reader_killed_by_a_bad_frame_closes_the_connection() {
     let value: AdsUdint = ads.read_symbol(SYMBOL).await.unwrap();
     assert_eq!(u32::from(value), SYMBOL_VALUE);
 }
+
+#[tokio::test]
+async fn a_plc_that_stops_replying_is_disconnected() {
+    let mut plc = FakePlc::start().await;
+    let ads = plc.ads(TIMEOUT).await;
+    let (session, connected) = tokio::join!(plc.accept(), ads.connect());
+    connected.unwrap();
+
+    session.hold_replies();
+    for _ in 0..3 {
+        assert!(ads.read_symbol::<AdsUdint>(SYMBOL).await.is_err());
+    }
+
+    assert!(
+        !ads.is_connected().await,
+        "three unanswered requests in a row should end the connection"
+    );
+    let started = Instant::now();
+    let failed = ads.read_symbol::<AdsUdint>(SYMBOL).await;
+    assert!(matches!(failed, Err(Error::Disconnected)), "got {failed:?}");
+    assert!(started.elapsed() < TIMEOUT / 2);
+
+    let (_session, ()) = tokio::join!(plc.accept(), ads.connect_with_retry());
+    let value: AdsUdint = ads.read_symbol(SYMBOL).await.unwrap();
+    assert_eq!(u32::from(value), SYMBOL_VALUE);
+}

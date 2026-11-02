@@ -73,6 +73,9 @@ impl Timeouts {
 
 type TimeoutResult<T> = std::result::Result<T, tokio::time::error::Elapsed>;
 
+/// Reply timeouts in a row after which the connection is treated as lost.
+const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
+
 type PendingReply = oneshot::Sender<Result<(AdsHeader, Bytes)>>;
 /// Replies still owed to requests, by invoke ID.
 type PendingCommands = std::sync::Mutex<BTreeMap<u32, PendingReply>>;
@@ -103,6 +106,9 @@ pub struct Client {
     /// Current invoke ID (identifies the request/reply pair), incremented
     /// after each request
     invoke_id: AtomicU32,
+
+    /// Reply timeouts since the last reply
+    consecutive_timeouts: AtomicU32,
 
     /// Requests, subscriptions, and the closed state, shared with the reader
     shared: Arc<Shared>,
@@ -223,6 +229,7 @@ impl Client {
                 source_port_opened,
                 socket_writer: Mutex::new(socket_writer),
                 invoke_id: AtomicU32::new(1),
+                consecutive_timeouts: AtomicU32::new(0),
                 shared,
                 receiver: Mutex::new(receiver),
             }
@@ -500,17 +507,25 @@ impl Client {
             Some(timeout) => match tokio::time::timeout(timeout, resp_rx).await {
                 Ok(reply) => reply,
                 Err(_elapsed) => {
-                    return Err(Error::Io(
+                    let error = Error::Io(
                         "waiting for response to dispatched request",
                         std::io::ErrorKind::TimedOut.into(),
-                    ));
+                    );
+                    let unanswered = self.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
+                    if unanswered >= MAX_CONSECUTIVE_TIMEOUTS {
+                        self.shared.tear_down(error.clone());
+                    }
+                    return Err(error);
                 }
             },
             None => resp_rx.await,
         };
 
         let (resp_header, resp_buf) = match reply {
-            Ok(Ok((header, payload))) => (header, payload),
+            Ok(Ok((header, payload))) => {
+                self.consecutive_timeouts.store(0, Ordering::Relaxed);
+                (header, payload)
+            }
             Ok(Err(e)) => return Err(e),
             Err(_recv_error) => {
                 return Err(Error::IoSync(
