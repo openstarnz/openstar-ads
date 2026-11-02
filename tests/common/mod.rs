@@ -76,9 +76,7 @@ impl FakePlc {
 
     /// An [`Ads`] pointed at this PLC with the given timeout everywhere.
     pub async fn ads(&self, timeout: Duration) -> Ads {
-        AdsBuilder::new("1.2.3.4.1.1:851".parse().unwrap())
-            .router(self.addr())
-            .source("5.6.7.8.1.1:30000".parse().unwrap())
+        self.ads_builder()
             .timeouts(Timeouts::new(timeout))
             .build()
             .await
@@ -87,13 +85,18 @@ impl FakePlc {
 
     /// An [`Ads`] pointed at this PLC with no timeouts at all.
     pub async fn ads_without_timeouts(&self) -> Ads {
-        AdsBuilder::new("1.2.3.4.1.1:851".parse().unwrap())
-            .router(self.addr())
-            .source("5.6.7.8.1.1:30000".parse().unwrap())
+        self.ads_builder()
             .timeouts(Timeouts::none())
             .build()
             .await
             .unwrap()
+    }
+
+    /// An [`AdsBuilder`] pointed at this PLC.
+    fn ads_builder(&self) -> AdsBuilder<SocketAddr> {
+        AdsBuilder::new("1.2.3.4.1.1:851".parse().unwrap())
+            .router(self.addr())
+            .source("5.6.7.8.1.1:30000".parse().unwrap())
     }
 }
 

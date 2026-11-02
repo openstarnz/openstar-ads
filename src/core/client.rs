@@ -20,7 +20,7 @@ use tokio::{
     sync::{mpsc, oneshot, watch, Mutex, MutexGuard},
     task::JoinHandle,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 use zerocopy::{
     little_endian::{U16, U32},
     FromBytes, FromZeros, Immutable, IntoBytes,
@@ -967,7 +967,10 @@ impl ClientReceiver {
                             match subscriber.try_send(Bytes::copy_from_slice(sample.data)) {
                                 Ok(()) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    // The receiver has fallen behind
+                                    debug!(
+                                        "Dropping ADS notification for handle {}: subscriber has fallen behind",
+                                        sample.handle
+                                    );
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
                                     dropped_subscribers.push(sample.handle);
