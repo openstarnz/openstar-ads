@@ -219,7 +219,7 @@ impl Client {
                 source,
                 commands.clone(),
                 subscribers.clone(),
-                timeouts.read.clone(),
+                timeouts.read,
             );
 
             Client {
