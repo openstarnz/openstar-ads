@@ -128,7 +128,8 @@ impl Ads {
             // Symbol handles belong to a connection, so a new one starts
             // without them.
             if !connection.is_connected() {
-                self.symbol_handles.lock().await.clear();
+                let mut symbol_handles = self.symbol_handles.lock().await;
+                symbol_handles.clear();
             }
 
             connection
@@ -179,7 +180,8 @@ impl Ads {
 
     /// Check whether the ADS client is connected.
     pub async fn is_connected(&self) -> bool {
-        self.connection.lock().await.is_connected()
+        let connection = self.connection.lock().await;
+        connection.is_connected()
     }
 
     /// Get info from the ADS device.

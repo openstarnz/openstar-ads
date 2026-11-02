@@ -74,20 +74,19 @@ impl Timeouts {
 type TimeoutResult<T> = std::result::Result<T, tokio::time::error::Elapsed>;
 
 type PendingReply = oneshot::Sender<Result<(AdsHeader, Bytes)>>;
-/// Replies still owed to requests, by invoke ID. Never held across an await.
+/// Replies still owed to requests, by invoke ID.
 type PendingCommands = std::sync::Mutex<BTreeMap<u32, PendingReply>>;
-/// Notification senders by handle. Never held across an await.
+/// Notification senders by handle.
 type NotificationSubscribers = std::sync::Mutex<BTreeMap<u32, mpsc::Sender<Bytes>>>;
 
-/// What the client and its reader task share, and the one place the
-/// connection's lifetime ends.
+/// The shared state between a client and its reader task.
 #[derive(Debug)]
 struct Shared {
     /// Active requests
     commands: PendingCommands,
     /// Subscriptions to notifications
     subscribers: NotificationSubscribers,
-    /// Why the connection ended, once it has.
+    /// Why the connection ended, once it has
     closed: watch::Sender<Option<Error>>,
 }
 
@@ -106,7 +105,7 @@ impl Shared {
 
     /// Ends the connection: every waiting request fails with `reason`, every
     /// notification subscription closes, and later requests fail at once.
-    /// Only the first call does anything.
+    /// Idempotent: only the first call does anything.
     fn tear_down(&self, reason: Error) {
         let first = self.closed.send_if_modified(|closed| {
             if closed.is_some() {
@@ -121,13 +120,19 @@ impl Shared {
 
         warn!("ADS connection closed: {reason}");
 
-        let pending = std::mem::take(&mut *self.commands.lock().unwrap());
+        let pending = {
+            let mut commands = self.commands.lock().unwrap();
+            std::mem::take(&mut *commands)
+        };
         for (_, reply) in pending {
             let _ = reply.send(Err(reason.clone()));
         }
 
         // Dropping the senders ends every `NotificationSubscription`.
-        self.subscribers.lock().unwrap().clear();
+        {
+            let mut subscribers = self.subscribers.lock().unwrap();
+            subscribers.clear();
+        }
     }
 }
 
@@ -156,7 +161,7 @@ pub struct Client {
     /// after each request
     invoke_id: AtomicU32,
 
-    /// Requests, subscriptions and the closed state, shared with the reader
+    /// Requests, subscriptions, and the closed state, shared with the reader
     shared: Arc<Shared>,
 
     /// IO receiver
@@ -283,8 +288,7 @@ impl Client {
         Ok(client)
     }
 
-    /// Whether the connection has ended, from either side. A closed client
-    /// fails every request at once with [`Error::Disconnected`].
+    /// Whether the connection has ended, from either side.
     pub fn is_closed(&self) -> bool {
         self.shared.is_closed()
     }
@@ -697,11 +701,10 @@ impl Client {
         .await?;
 
         let (sender, receiver) = mpsc::channel(32);
-        self.shared
-            .subscribers
-            .lock()
-            .unwrap()
-            .insert(handle.get(), sender);
+        {
+            let mut subscribers = self.shared.subscribers.lock().unwrap();
+            subscribers.insert(handle.get(), sender);
+        }
 
         Ok((receiver, handle.get()))
     }
@@ -715,7 +718,10 @@ impl Client {
         )
         .await?;
 
-        self.shared.subscribers.lock().unwrap().remove(&handle);
+        {
+            let mut subscribers = self.shared.subscribers.lock().unwrap();
+            subscribers.remove(&handle);
+        }
 
         Ok(())
     }
@@ -726,15 +732,11 @@ impl Client {
         // Delete all active notifications. On a closed client each of these
         // fails at once, which is fine: the socket is going away anyway.
         {
-            let subscribers = self
-                .shared
-                .subscribers
-                .lock()
-                .unwrap()
-                .keys()
-                .cloned()
-                .collect_vec();
-            for handle in subscribers {
+            let handles = {
+                let subscribers = self.shared.subscribers.lock().unwrap();
+                subscribers.keys().cloned().collect_vec()
+            };
+            for handle in handles {
                 let _ = self.delete_notification(handle).await;
             }
         }
@@ -753,7 +755,10 @@ impl Client {
         }
 
         // Stop the receiver task, then settle whatever it had not.
-        self.receiver.lock().await.stop().await;
+        {
+            let mut receiver = self.receiver.lock().await;
+            receiver.stop().await;
+        }
         self.shared.tear_down(Error::Disconnected);
     }
 }
@@ -768,7 +773,10 @@ struct PendingRequest<'a> {
 
 impl<'a> PendingRequest<'a> {
     fn register(commands: &'a PendingCommands, invoke_id: u32, reply: PendingReply) -> Self {
-        commands.lock().unwrap().insert(invoke_id, reply);
+        {
+            let mut commands = commands.lock().unwrap();
+            commands.insert(invoke_id, reply);
+        }
         Self {
             commands,
             invoke_id,
@@ -778,7 +786,10 @@ impl<'a> PendingRequest<'a> {
 
 impl Drop for PendingRequest<'_> {
     fn drop(&mut self) {
-        self.commands.lock().unwrap().remove(&self.invoke_id);
+        {
+            let mut commands = self.commands.lock().unwrap();
+            commands.remove(&self.invoke_id);
+        }
     }
 }
 
@@ -811,7 +822,8 @@ impl ClientReceiver {
             // Tell the peer too, in case it was the protocol and not the
             // socket that broke.
             if let Some(client) = client.upgrade() {
-                let _ = client.socket_writer.lock().await.shutdown().await;
+                let mut writer = client.socket_writer.lock().await;
+                let _ = writer.shutdown().await;
             }
         });
 
@@ -921,7 +933,10 @@ impl ClientReceiver {
             // If it looks like a reply, send it back to the requesting thread,
             // it will handle further validation.
             if ads_header.command != Command::Notification as u16 {
-                let pending = shared.commands.lock().unwrap().remove(&invoke_id);
+                let pending = {
+                    let mut commands = shared.commands.lock().unwrap();
+                    commands.remove(&invoke_id)
+                };
                 match pending {
                     Some(tx) => {
                         // A failed send means the request was dropped between
