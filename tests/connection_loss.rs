@@ -227,7 +227,7 @@ async fn a_write_that_cannot_complete_closes_the_connection() {
 
     session.stop_reading();
     // A symbol name bigger than the socket buffers, so the write cannot finish.
-    let huge_symbol = "x".repeat(16 << 20);
+    let huge_symbol = "x".repeat(64 << 20);
     assert!(ads.read_symbol::<AdsUdint>(&huge_symbol).await.is_err());
 
     let closed = timeout(TIMEOUT, subscription.recv()).await;

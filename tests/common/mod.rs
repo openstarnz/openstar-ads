@@ -12,7 +12,6 @@ use std::{
 };
 
 use openstar_ads::{Ads, AdsBuilder, Timeouts};
-use socket2::{Domain, Socket, Type};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -52,16 +51,7 @@ pub struct FakePlc {
 
 impl FakePlc {
     pub async fn start() -> Self {
-        // A small receive buffer, so a client that writes faster than the
-        // PLC reads is blocked after kilobytes rather than megabytes.
-        let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
-        socket.set_recv_buffer_size(4096).unwrap();
-        socket.set_nonblocking(true).unwrap();
-        socket
-            .bind(&"127.0.0.1:0".parse::<SocketAddr>().unwrap().into())
-            .unwrap();
-        socket.listen(8).unwrap();
-        let listener = TcpListener::from_std(socket.into()).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         Self {
             listener,
             sessions: 0,
