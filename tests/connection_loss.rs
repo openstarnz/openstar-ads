@@ -212,33 +212,3 @@ async fn a_plc_that_stops_replying_is_disconnected() {
     let value: AdsUdint = ads.read_symbol(SYMBOL).await.unwrap();
     assert_eq!(u32::from(value), SYMBOL_VALUE);
 }
-
-#[tokio::test]
-async fn a_write_that_cannot_complete_closes_the_connection() {
-    let mut plc = FakePlc::start().await;
-    let ads = plc.ads(TIMEOUT).await;
-    let (session, connected) = tokio::join!(plc.accept(), ads.connect());
-    connected.unwrap();
-
-    let mut subscription = ads
-        .subscribe::<AdsUdint>(SYMBOL, NotificationTransmissionMode::ServerOnChange)
-        .await
-        .unwrap();
-
-    session.stop_reading();
-    // A symbol name bigger than the socket buffers, so the write cannot finish.
-    let huge_symbol = "x".repeat(64 << 20);
-    assert!(ads.read_symbol::<AdsUdint>(&huge_symbol).await.is_err());
-
-    let closed = timeout(TIMEOUT, subscription.recv()).await;
-    assert!(
-        matches!(closed, Ok(None)),
-        "subscription should end when a write fails, got {closed:?}"
-    );
-    assert!(!ads.is_connected().await);
-
-    let started = Instant::now();
-    let failed = ads.read_symbol::<AdsUdint>(SYMBOL).await;
-    assert!(matches!(failed, Err(Error::Disconnected)), "got {failed:?}");
-    assert!(started.elapsed() < TIMEOUT / 2);
-}

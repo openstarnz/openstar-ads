@@ -18,7 +18,7 @@ use tokio::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpListener, TcpStream,
     },
-    sync::{mpsc, watch, Notify},
+    sync::{mpsc, Notify},
 };
 
 const AMS_TCP_HEADER: usize = 6;
@@ -102,7 +102,6 @@ enum Control {
     Close,
     KeepOpenAfterClientShutdown,
     SendMalformedFrame,
-    StopReading,
 }
 
 /// One client connection to the fake PLC.
@@ -132,7 +131,6 @@ impl Session {
             holding: false,
             held: Vec::new(),
             keep_open_after_client_shutdown: false,
-            reading: watch::Sender::new(true),
         };
         tokio::spawn(worker.run(reader));
 
@@ -168,11 +166,6 @@ impl Session {
         let _ = self.control.send(Control::SendMalformedFrame);
     }
 
-    /// Stop reading from the socket, so the client's writes back up.
-    pub fn stop_reading(&self) {
-        let _ = self.control.send(Control::StopReading);
-    }
-
     /// Keep our side of the socket open after the client shuts down its
     /// write half, as a peer that never closes would.
     pub fn keep_open_after_client_shutdown(&self) {
@@ -203,13 +196,12 @@ struct Worker {
     holding: bool,
     held: Vec<Vec<u8>>,
     keep_open_after_client_shutdown: bool,
-    reading: watch::Sender<bool>,
 }
 
 impl Worker {
     async fn run(mut self, reader: OwnedReadHalf) {
         let (frames_tx, mut frames) = mpsc::unbounded_channel();
-        tokio::spawn(read_frames(reader, frames_tx, self.reading.subscribe()));
+        tokio::spawn(read_frames(reader, frames_tx));
         let mut client_gone = false;
 
         loop {
@@ -255,9 +247,6 @@ impl Worker {
                         if self.writer.write_all(&packet).await.is_err() {
                             return;
                         }
-                    }
-                    Some(Control::StopReading) => {
-                        self.reading.send_replace(false);
                     }
                     Some(Control::Close) | None => return,
                 },
@@ -337,15 +326,8 @@ fn with_length(data: &[u8]) -> Vec<u8> {
 }
 
 /// Reads whole AMS frames from the socket until it closes.
-async fn read_frames(
-    mut reader: OwnedReadHalf,
-    frames: mpsc::UnboundedSender<Vec<u8>>,
-    mut reading: watch::Receiver<bool>,
-) {
+async fn read_frames(mut reader: OwnedReadHalf, frames: mpsc::UnboundedSender<Vec<u8>>) {
     loop {
-        if reading.wait_for(|reading| *reading).await.is_err() {
-            return;
-        }
         let mut tcp_header = [0u8; AMS_TCP_HEADER];
         if reader.read_exact(&mut tcp_header).await.is_err() {
             return;
