@@ -758,11 +758,7 @@ impl Shared {
         Ok(())
     }
 
-    /// End the connection. Idempotent.
-    ///
-    /// `closed` is set before either map is emptied, and `register` and
-    /// `subscribe` check it under the map's lock, so nothing can be added
-    /// after the map is emptied.
+    /// End the connection, idempotent.
     fn tear_down(&self, reason: Error) {
         let first = self.closed.send_if_modified(|closed| {
             if closed.is_some() {
@@ -792,7 +788,7 @@ impl Shared {
     }
 }
 
-/// Removes the request from the pending map when dropped.
+/// When dropped, removes the request from the pending map.
 struct PendingRequest<'a> {
     commands: &'a PendingCommands,
     invoke_id: u32,
