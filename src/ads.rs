@@ -124,6 +124,12 @@ impl Ads {
     pub async fn connect(&self) -> Result<()> {
         {
             let mut connection = self.connection.lock().await;
+
+            if !connection.is_connected() {
+                let mut symbol_handles = self.symbol_handles.lock().await;
+                symbol_handles.clear();
+            }
+
             connection
                 .connect(
                     self.router_addresses.as_slice(),
@@ -173,10 +179,7 @@ impl Ads {
     /// Check whether the ADS client is connected.
     pub async fn is_connected(&self) -> bool {
         let connection = self.connection.lock().await;
-        match *connection {
-            AdsConnection::Connected(_) => true,
-            AdsConnection::Disconnected => false,
-        }
+        connection.is_connected()
     }
 
     /// Get info from the ADS device.
@@ -423,11 +426,9 @@ impl Ads {
         Ok(subscription)
     }
 
+    /// If the PLC's ADS port is gone, the client should disconnect (and reconnect).
     fn should_disconnect(error: &Error) -> bool {
-        matches!(
-            error,
-            Error::Io(_, _) | Error::Ads(_, _, 0x006) | Error::Reply(_, "unexpected invoke ID", _)
-        )
+        matches!(error, Error::Ads(_, _, 0x006))
     }
 
     async fn with_client<Callback, Output>(&self, name: &str, callback: Callback) -> Result<Output>
@@ -442,14 +443,14 @@ impl Ads {
             client
         };
 
-        let result = callback(client).await;
+        let result = callback(client.clone()).await;
 
         match result {
             Ok(value) => Ok(value),
             Err(error) => {
                 error!("{name} error: {error}");
 
-                if Self::should_disconnect(&error) {
+                if client.is_closed() || Self::should_disconnect(&error) {
                     warn!("PLC client error indicates we should disconnect...");
 
                     // Ignore disconnect error

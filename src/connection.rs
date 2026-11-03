@@ -21,23 +21,27 @@ impl AdsConnection {
         timeouts: Timeouts,
         set_to_run_mode: bool,
     ) -> Result<()> {
-        match self {
-            AdsConnection::Connected(_) => {
-                info!("Attempted to connect to PLC but it is already connected!")
-            }
-            AdsConnection::Disconnected => {
-                let client = core::Client::new(router, target, source, timeouts).await?;
-
-                if let Err(error) = Self::ensure_run_mode(&client, set_to_run_mode).await {
-                    client.close().await;
-                    return Err(error);
-                }
-
-                *self = AdsConnection::Connected(client);
-            }
+        if self.is_connected() {
+            info!("Attempted to connect to PLC but it is already connected!");
+            return Ok(());
         }
 
+        self.disconnect().await;
+
+        let client = core::Client::new(router, target, source, timeouts).await?;
+
+        if let Err(error) = Self::ensure_run_mode(&client, set_to_run_mode).await {
+            client.close().await;
+            return Err(error);
+        }
+
+        *self = AdsConnection::Connected(client);
+
         Ok(())
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.client().is_some()
     }
 
     pub async fn disconnect(&mut self) {
@@ -55,10 +59,11 @@ impl AdsConnection {
         }
     }
 
+    /// The client, if it is still connected.
     pub fn client(&self) -> Option<Arc<core::Client>> {
         match self {
-            AdsConnection::Connected(client) => Some(client.clone()),
-            AdsConnection::Disconnected => None,
+            AdsConnection::Connected(client) if !client.is_closed() => Some(client.clone()),
+            AdsConnection::Connected(_) | AdsConnection::Disconnected => None,
         }
     }
 

@@ -17,10 +17,10 @@ use tokio::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpStream, ToSocketAddrs,
     },
-    sync::{mpsc, oneshot, Mutex, MutexGuard},
+    sync::{mpsc, oneshot, watch, Mutex, MutexGuard},
     task::JoinHandle,
 };
-use tracing::warn;
+use tracing::{debug, warn};
 use zerocopy::{
     little_endian::{U16, U32},
     FromBytes, FromZeros, Immutable, IntoBytes,
@@ -73,8 +73,14 @@ impl Timeouts {
 
 type TimeoutResult<T> = std::result::Result<T, tokio::time::error::Elapsed>;
 
-type PendingCommands = Arc<Mutex<BTreeMap<u32, oneshot::Sender<Result<(AdsHeader, Bytes)>>>>>;
-type NotificationSubscribers = Arc<Mutex<BTreeMap<u32, mpsc::Sender<Bytes>>>>;
+/// Reply timeouts in a row after which the connection is treated as lost.
+const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
+
+type PendingReply = oneshot::Sender<Result<(AdsHeader, Bytes)>>;
+/// Replies still owed to requests, by invoke ID.
+type PendingCommands = std::sync::Mutex<BTreeMap<u32, PendingReply>>;
+/// Notification senders by handle.
+type NotificationSubscribers = std::sync::Mutex<BTreeMap<u32, mpsc::Sender<Bytes>>>;
 
 /// Represents a connection to a ADS server.
 ///
@@ -101,10 +107,11 @@ pub struct Client {
     /// after each request
     invoke_id: AtomicU32,
 
-    /// Active requests
-    commands: PendingCommands,
-    /// Subscriptions to notifications
-    subscribers: NotificationSubscribers,
+    /// Reply timeouts since the last reply
+    consecutive_timeouts: AtomicU32,
+
+    /// Requests, subscriptions, and the closed state, shared with the reader
+    shared: Arc<Shared>,
 
     /// IO receiver
     receiver: Mutex<ClientReceiver>,
@@ -208,19 +215,12 @@ impl Client {
 
         let (socket_reader, socket_writer) = socket.into_split();
 
-        let commands = Arc::new(Mutex::new(BTreeMap::new()));
-        let subscribers = Arc::new(Mutex::new(BTreeMap::new()));
+        let shared = Arc::new(Shared::new());
 
         let client = Arc::new_cyclic(|weak| {
             let mut receiver = ClientReceiver::new(weak.clone());
 
-            receiver.start(
-                socket_reader,
-                source,
-                commands.clone(),
-                subscribers.clone(),
-                timeouts.read,
-            );
+            receiver.start(socket_reader, source, shared.clone());
 
             Client {
                 source,
@@ -229,13 +229,18 @@ impl Client {
                 source_port_opened,
                 socket_writer: Mutex::new(socket_writer),
                 invoke_id: AtomicU32::new(1),
-                commands,
-                subscribers,
+                consecutive_timeouts: AtomicU32::new(0),
+                shared,
                 receiver: Mutex::new(receiver),
             }
         });
 
         Ok(client)
+    }
+
+    /// Whether the connection has ended, from either side.
+    pub fn is_closed(&self) -> bool {
+        self.shared.is_closed()
     }
 
     /// Read the device's name + version.
@@ -476,69 +481,56 @@ impl Client {
 
         let (resp_tx, resp_rx) = oneshot::channel::<Result<(AdsHeader, Bytes)>>();
 
-        self.insert_pending_command(dispatched_invoke_id, resp_tx)
-            .await;
+        let _pending = self.shared.register(dispatched_invoke_id, resp_tx)?;
 
-        {
+        let written = {
             let mut writer: MutexGuard<OwnedWriteHalf> = self.socket_writer.lock().await;
-
-            {
-                let future = writer.write_all(&request_buf);
-                if let Some(timeout) = self.timeouts.write {
-                    let result: TimeoutResult<io::Result<_>> =
-                        tokio::time::timeout(timeout, future).await;
-                    result.ctx("dispatching assembled command payload (with timeout)")?;
-                } else {
-                    let result: io::Result<_> = future.await;
-                    result.ctx("dispatching assembled command payload")?;
-                }
+            let future = writer.write_all(&request_buf);
+            if let Some(timeout) = self.timeouts.write {
+                let result: TimeoutResult<io::Result<_>> =
+                    tokio::time::timeout(timeout, future).await;
+                result.ctx("dispatching assembled command payload (with timeout)")
+            } else {
+                let result: io::Result<_> = future.await;
+                result.ctx("dispatching assembled command payload")
             }
+        };
+        if let Err(error) = written {
+            self.shared.tear_down(error.clone());
+            return Err(error);
         }
 
-        let (resp_header, resp_buf) = match self.timeouts.read {
+        let reply = match self.timeouts.read {
             Some(timeout) => match tokio::time::timeout(timeout, resp_rx).await {
-                Ok(Ok(Ok((header, payload)))) => (header, payload),
-
-                Ok(Ok(Err(e))) => {
-                    self.discard_pending_command(&dispatched_invoke_id).await;
-                    return Err(e);
-                }
-
-                Ok(Err(_recv_error)) => {
-                    self.discard_pending_command(&dispatched_invoke_id).await;
-                    return Err(Error::IoSync(
-                        "waiting for response to dispatched request",
-                        "response channel was closed",
-                        dispatched_invoke_id,
-                    ));
-                }
-
+                Ok(reply) => reply,
                 Err(_elapsed) => {
-                    self.discard_pending_command(&dispatched_invoke_id).await;
-                    return Err(Error::Io(
+                    let error = Error::Io(
                         "waiting for response to dispatched request",
                         std::io::ErrorKind::TimedOut.into(),
-                    ));
+                    );
+                    let unanswered = self.consecutive_timeouts.fetch_add(1, Ordering::Relaxed) + 1;
+                    if unanswered >= MAX_CONSECUTIVE_TIMEOUTS {
+                        self.shared.tear_down(error.clone());
+                    }
+                    return Err(error);
                 }
             },
+            None => resp_rx.await,
+        };
 
-            None => match resp_rx.await {
-                Ok(Ok((header, payload))) => (header, payload),
-
-                Ok(Err(e)) => {
-                    self.discard_pending_command(&dispatched_invoke_id).await;
-                    return Err(e);
-                }
-
-                Err(_) => {
-                    self.discard_pending_command(&dispatched_invoke_id).await;
-                    return Err(Error::IoSync(
-                        "waiting for response to dispatched request",
-                        "response channel was closed",
-                        dispatched_invoke_id,
-                    ));
-                }
-            },
+        let (resp_header, resp_buf) = match reply {
+            Ok(Ok((header, payload))) => {
+                self.consecutive_timeouts.store(0, Ordering::Relaxed);
+                (header, payload)
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(_recv_error) => {
+                return Err(Error::IoSync(
+                    "waiting for response to dispatched request",
+                    "response channel was closed",
+                    dispatched_invoke_id,
+                ));
+            }
         };
 
         // Validate the incoming reply. The reader thread already made sure that
@@ -630,18 +622,6 @@ impl Client {
         Ok(resp_buf.len())
     }
 
-    async fn insert_pending_command(
-        &self,
-        id: u32,
-        tx: oneshot::Sender<Result<(AdsHeader, Bytes)>>,
-    ) {
-        self.commands.lock().await.insert(id, tx);
-    }
-
-    async fn discard_pending_command(&self, id: &u32) {
-        self.commands.lock().await.remove_entry(id);
-    }
-
     /// Add a notification handle for some index group/offset, returns
     /// a MPSC receiver channel and a handle.
     ///
@@ -671,10 +651,7 @@ impl Client {
         .await?;
 
         let (sender, receiver) = mpsc::channel(32);
-        {
-            let mut subscribers = self.subscribers.lock().await;
-            subscribers.insert(handle.get(), sender);
-        }
+        self.shared.subscribe(handle.get(), sender)?;
 
         Ok((receiver, handle.get()))
     }
@@ -689,18 +666,22 @@ impl Client {
         .await?;
 
         {
-            let mut subscribers = self.subscribers.lock().await;
+            let mut subscribers = self.shared.subscribers.lock().unwrap();
             subscribers.remove(&handle);
         }
 
         Ok(())
     }
 
+    /// Close the connection.
     pub async fn close(&self) {
         // Delete all active notifications.
         {
-            let subscribers = self.subscribers.lock().await.keys().cloned().collect_vec();
-            for handle in subscribers {
+            let handles = {
+                let subscribers = self.shared.subscribers.lock().unwrap();
+                subscribers.keys().cloned().collect_vec()
+            };
+            for handle in handles {
                 let _ = self.delete_notification(handle).await;
             }
         }
@@ -718,10 +699,106 @@ impl Client {
             let _ = socket.shutdown().await;
         }
 
-        // Stop the recevier task.
         {
             let mut receiver = self.receiver.lock().await;
-            let _ = receiver.stop().await;
+            receiver.stop().await;
+        }
+        self.shared.tear_down(Error::Disconnected);
+    }
+}
+
+/// The shared state between a client and its reader task.
+#[derive(Debug)]
+struct Shared {
+    /// Active requests
+    commands: PendingCommands,
+    /// Subscriptions to notifications
+    subscribers: NotificationSubscribers,
+    /// Why the connection ended, once it has
+    closed: watch::Sender<Option<Error>>,
+}
+
+impl Shared {
+    fn new() -> Self {
+        Self {
+            commands: Default::default(),
+            subscribers: Default::default(),
+            closed: watch::Sender::new(None),
+        }
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.borrow().is_some()
+    }
+
+    /// Fails if the connection has ended.
+    fn register(&self, invoke_id: u32, reply: PendingReply) -> Result<PendingRequest<'_>> {
+        {
+            let mut commands = self.commands.lock().unwrap();
+            if self.is_closed() {
+                return Err(Error::Disconnected);
+            }
+            commands.insert(invoke_id, reply);
+        }
+        Ok(PendingRequest {
+            commands: &self.commands,
+            invoke_id,
+        })
+    }
+
+    /// Fails if the connection has ended.
+    fn subscribe(&self, handle: NotificationHandle, sender: mpsc::Sender<Bytes>) -> Result<()> {
+        {
+            let mut subscribers = self.subscribers.lock().unwrap();
+            if self.is_closed() {
+                return Err(Error::Disconnected);
+            }
+            subscribers.insert(handle, sender);
+        }
+        Ok(())
+    }
+
+    /// End the connection, idempotent.
+    fn tear_down(&self, reason: Error) {
+        let first = self.closed.send_if_modified(|closed| {
+            if closed.is_some() {
+                return false;
+            }
+            *closed = Some(reason.clone());
+            true
+        });
+        if !first {
+            return;
+        }
+
+        warn!("ADS connection closed: {reason}");
+
+        let pending = {
+            let mut commands = self.commands.lock().unwrap();
+            std::mem::take(&mut *commands)
+        };
+        for (_, reply) in pending {
+            let _ = reply.send(Err(reason.clone()));
+        }
+
+        {
+            let mut subscribers = self.subscribers.lock().unwrap();
+            subscribers.clear();
+        }
+    }
+}
+
+/// When dropped, removes the request from the pending map.
+struct PendingRequest<'a> {
+    commands: &'a PendingCommands,
+    invoke_id: u32,
+}
+
+impl Drop for PendingRequest<'_> {
+    fn drop(&mut self) {
+        {
+            let mut commands = self.commands.lock().unwrap();
+            commands.remove(&self.invoke_id);
         }
     }
 }
@@ -731,7 +808,7 @@ impl Client {
 #[derive(Debug)]
 struct ClientReceiver {
     client: Weak<Client>,
-    handle: Option<JoinHandle<Result<()>>>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl ClientReceiver {
@@ -742,114 +819,73 @@ impl ClientReceiver {
         }
     }
 
-    fn start(
-        &mut self,
-        mut socket: OwnedReadHalf,
-        source: AmsAddr,
-        commands: PendingCommands,
-        subscribers: NotificationSubscribers,
-        read_timeout: Option<Duration>,
-    ) {
+    fn start(&mut self, mut socket: OwnedReadHalf, source: AmsAddr, shared: Arc<Shared>) {
         let client = self.client.clone();
         let rx_worker = tokio::spawn(async move {
-            let result = Self::reader_work(
-                client,
-                &mut socket,
-                source,
-                commands.clone(),
-                subscribers.clone(),
-                read_timeout,
-            )
-            .await;
+            let reason = match Self::reader_work(&client, &mut socket, source, &shared).await {
+                Ok(()) => Error::Disconnected,
+                Err(error) => error,
+            };
 
-            let mut commands = commands.lock().await;
-            let keys = commands.keys().cloned().collect_vec();
-            for key in keys {
-                if let Some(channel) = commands.remove(&key) {
-                    let err = if let Err(e) = &result {
-                        Err(e.clone())
-                    } else {
-                        Err(Error::Reply(
-                            "handling clean shutdown",
-                            "pending request at client shutdown",
-                            0,
-                        ))
-                    };
+            shared.tear_down(reason);
 
-                    let _ = channel.send(err);
-                };
+            if let Some(client) = client.upgrade() {
+                let mut writer = client.socket_writer.lock().await;
+                let _ = writer.shutdown().await;
             }
-
-            result
         });
 
         let _handle = self.handle.insert(rx_worker);
     }
 
-    pub async fn stop(&mut self) -> Option<Result<()>> {
+    pub async fn stop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            handle.await.ok()
-        } else {
-            None
+            handle.abort();
+            let _ = handle.await;
         }
     }
+}
 
+impl Drop for ClientReceiver {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+impl ClientReceiver {
     async fn reader_work(
-        client: Weak<Client>,
+        client: &Weak<Client>,
         socket_rx: &mut OwnedReadHalf,
         source: AmsAddr,
-        commands: PendingCommands,
-        subscribers: NotificationSubscribers,
-        read_timeout: Option<Duration>,
+        shared: &Shared,
     ) -> Result<()> {
         loop {
             let mut ads_header_buf = [0u8; ADS_HEADER_SIZE];
 
-            {
-                let future = socket_rx.read_exact(&mut ads_header_buf[..6]);
-                if let Some(timeout) = read_timeout {
-                    let result: TimeoutResult<io::Result<_>> =
-                        tokio::time::timeout(timeout, future).await;
-                    result.ctx("receiving AMS/TCP header (with timeout)")?;
-                } else {
-                    let result: io::Result<_> = future.await;
-                    result.ctx("receiving AMS/TCP header")?;
-                };
-            }
+            socket_rx
+                .read_exact(&mut ads_header_buf[..6])
+                .await
+                .ctx("receiving AMS/TCP header")?;
 
             let packet_len = LE::read_u32(&ads_header_buf[2..6]);
 
             let ads_header = match packet_len {
                 0..=31 => {
                     let mut discard = [0u8; 31];
-
-                    {
-                        let future = socket_rx.read_exact(&mut discard[..packet_len as usize]);
-                        if let Some(timeout) = read_timeout {
-                            let result: TimeoutResult<io::Result<_>> =
-                                tokio::time::timeout(timeout, future).await;
-                            result.ctx("discarding bad data (with timeout)")?;
-                        } else {
-                            let result: io::Result<_> = future.await;
-                            result.ctx("discarding bad data")?;
-                        };
-                    }
-
+                    socket_rx
+                        .read_exact(&mut discard[..packet_len as usize])
+                        .await
+                        .ctx("discarding bad data")?;
                     continue;
                 }
 
                 _ => {
-                    {
-                        let future = socket_rx.read_exact(&mut ads_header_buf[6..]);
-                        if let Some(timeout) = read_timeout {
-                            let result: TimeoutResult<io::Result<_>> =
-                                tokio::time::timeout(timeout, future).await;
-                            result.ctx("receiving AMS header (with timeout)")?;
-                        } else {
-                            let result: io::Result<_> = future.await;
-                            result.ctx("receiving AMS header")?;
-                        };
-                    }
+                    socket_rx
+                        .read_exact(&mut ads_header_buf[6..])
+                        .await
+                        .ctx("receiving AMS header")?;
 
                     AdsHeader::read_from_bytes(&ads_header_buf[..ADS_HEADER_SIZE])
                         .map_err(|_| std::io::ErrorKind::InvalidData.into())
@@ -860,18 +896,10 @@ impl ClientReceiver {
             let payload_len = ads_header.data_length.get();
 
             let mut payload_buf = BytesMut::zeroed(payload_len as usize);
-
-            {
-                let future = socket_rx.read_exact(&mut payload_buf);
-                if let Some(timeout) = read_timeout {
-                    let result: TimeoutResult<io::Result<_>> =
-                        tokio::time::timeout(timeout, future).await;
-                    result.ctx("receiving Ads data payload (with timeout)")?;
-                } else {
-                    let result: io::Result<_> = future.await;
-                    result.ctx("receiving Ads data payload")?;
-                };
-            }
+            socket_rx
+                .read_exact(&mut payload_buf)
+                .await
+                .ctx("receiving Ads data payload")?;
 
             // Reserved bytes should be well-known
             // Anything else might be invalid data
@@ -908,23 +936,17 @@ impl ClientReceiver {
             // If it looks like a reply, send it back to the requesting thread,
             // it will handle further validation.
             if ads_header.command != Command::Notification as u16 {
-                match commands.lock().await.remove_entry(&invoke_id) {
-                    Some((_, tx)) => {
-                        if tx.send(Ok((ads_header, payload_buf.freeze()))).is_err() {
-                            return Err(Error::IoSync(
-                                "settling pending request",
-                                "channel closed, couldn't dispatch response",
-                                invoke_id,
-                            ));
-                        }
+                let pending = {
+                    let mut commands = shared.commands.lock().unwrap();
+                    commands.remove(&invoke_id)
+                };
+                match pending {
+                    Some(tx) => {
+                        let _ = tx.send(Ok((ads_header, payload_buf.freeze())));
                     }
 
-                    _ => {
-                        return Err(Error::Reply(
-                            "settling pending request",
-                            "invalid invoke id received from server, aborting connection",
-                            invoke_id,
-                        ));
+                    None => {
+                        warn!("Ignoring late ADS reply with invoke ID {invoke_id}");
                     }
                 };
             } else {
@@ -944,14 +966,20 @@ impl ClientReceiver {
                     let mut dropped_subscribers = Vec::<NotificationHandle>::new();
 
                     {
-                        let subscribers = subscribers.lock().await;
+                        let subscribers = shared.subscribers.lock().unwrap();
                         for sample in notif.samples() {
-                            if let Some(subscriber) = subscribers.get(&sample.handle) {
-                                // When you can't send, that means the receiver is gone.
-                                if let Err(_error) =
-                                    subscriber.send(Bytes::copy_from_slice(sample.data)).await
-                                {
-                                    // So remove from subscribers
+                            let Some(subscriber) = subscribers.get(&sample.handle) else {
+                                continue;
+                            };
+                            match subscriber.try_send(Bytes::copy_from_slice(sample.data)) {
+                                Ok(()) => {}
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    debug!(
+                                        "Dropping ADS notification for handle {}: subscriber has fallen behind",
+                                        sample.handle
+                                    );
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
                                     dropped_subscribers.push(sample.handle);
                                 }
                             }
